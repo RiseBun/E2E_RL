@@ -1,11 +1,23 @@
-# E2E_RL: research prototype extensions for end-to-end planners
-from .planning_interface import (
-    PlanningInterface,
-    PlanningInterfaceExtractor,
-    BasePlanningAdapter,
-    VADPlanningAdapter,
+# E2E_RL: 端到端强化学习修正框架
+from .correction_policy import (
+    CorrectionPolicy,
+    GaussianCorrectionActor,
+    behavioral_cloning_loss,
+    policy_gradient_loss,
+    compute_advantage,
 )
-from .refinement import InterfaceRefiner
-from .hard_case import HardCaseMiner
-from .trainers import InterfaceRefinerTrainer
-from .evaluators import evaluate_refined_plans
+from .rl_trainer import CorrectionPolicyTrainer
+from .update_selector import SafetyGuard, STAPOGate
+from .planning_interface import PlanningInterface
+
+__all__ = [
+    'CorrectionPolicy',
+    'GaussianCorrectionActor',
+    'behavioral_cloning_loss',
+    'policy_gradient_loss',
+    'compute_advantage',
+    'CorrectionPolicyTrainer',
+    'SafetyGuard',
+    'STAPOGate',
+    'PlanningInterface',
+]

@@ -1,0 +1,64 @@
+# =============================================================================
+# UpdateEvaluator 训练配置
+#
+# 训练 Learned Update Selector（多头回归）：
+# 输入: (scene_token, reference_plan, correction, structured_stats)
+# 输出: pred_gain, pred_collision, pred_offroad, pred_comfort, pred_drift
+# =============================================================================
+
+# ---- 数据配置 ----
+data:
+  data_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/data/vad_dumps
+  batch_size: 8
+
+# ---- 候选生成配置 ----
+candidate_gen:
+  collect_all_types: true           # 生成所有类型的候选修正
+  max_per_type: 1                   # 每种类型生成多少个
+  random_scale: 2.0                # 随机修正的缩放因子
+  gt_directed_scale: 0.5            # GT-directed 修正的缩放因子
+
+# ---- 数据收集配置 ----
+data_collection:
+  n_batches: 100                   # 收集多少个 batch 的数据（None 表示全部）
+
+# ---- 模型配置 ----
+model:
+  scene_dim: 256
+  plan_len: 6   # 注意：VAD数据是6步轨迹
+  hidden_dim: 256
+  dropout: 0.1
+
+# ---- Risk 权重 ----
+risk_weights:
+  collision: 2.0
+  offroad: 1.0
+  comfort: 0.5
+  drift: 1.0
+
+# ---- 训练配置 ----
+training:
+  batch_size: 64
+  alpha_gain: 1.0                  # Gain loss 权重
+  beta_risk: 1.0                   # Risk loss 权重
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  epochs: 10
+  eval_every: 5
+
+# ---- 奖励配置 ----
+reward:
+  dt: 0.5
+  w_progress: 1.0
+  w_collision: 0.5
+  w_offroad: 0.3
+  w_comfort: 0.1
+
+# ---- 过滤配置（用于离线验证） ----
+filtering:
+  tau_gain: 0.0                    # Gain 阈值
+  tau_risk: 0.5                    # Risk 阈值
+
+# ---- 输出目录 ----
+output_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/update_evaluator

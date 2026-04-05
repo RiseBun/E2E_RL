@@ -1,288 +1,315 @@
-# E2E_RL 项目说明
+# E2E_RL: 端到端强化学习修正框架
 
-## 一、项目定位
+**架构**: Correction Policy (高斯策略) + 三层防御级联 (SafetyGuard → STAPOGate → LearnedUpdateGate)
 
-E2E_RL 是一个**模型无关的外挂式轨迹精炼框架**，专为自动驾驶端到端(E2E)规划器设计。
-
-**核心价值**：无需修改你的 E2E 模型，只需添加一个轻量级 Adapter，即可获得：
-- 轨迹精炼能力（Refiner）
-- 智能筛选能力（Scorer）
-- 安全兜底保障（HUF）
+不同于旧的 "Refiner + 后验裁决器" 架构，E2E_RL 现在是一个真正的 RL 修正框架。
 
 ---
 
-## 二、核心问题与解决方案
+## 核心架构
 
-### 问题
-```
-E2E 规划器输出的轨迹不一定最优，需要修正
-但不是所有修正都是好的，有些修正反而会让轨迹变差
-```
-
-### 解决方案：训练一个"智能筛选器"
+### 旧架构（废弃）→ 新架构
 
 ```
-E2E 规划器 → Refiner 生成修正 → Scorer 评估 → HUF 兜底 → 接受/拒绝修正
-                                    ↑
-                              核心创新点
+旧: Refiner → Scorer 评估 → HUF 兜底 → 接受/拒绝修正
+新: Policy 采样修正 → 三层门控筛选 → 梯度更新 Policy
 ```
 
-**创新点**：不是简单接受所有修正，而是让模型学会判断"哪些修正值得应用，哪些应该拒绝"。
+**核心区别**: 筛选器服务于 **policy update selection**（决定哪些梯度更新进 loss），而非 **correction acceptance**（推理时裁决接不接受修正）。
+
+### 新架构 Pipeline
+
+```
+Stage 1: Behavioral Cloning 预热
+  GT correction = gt_plan - ref_plan
+  Loss = -log π(gt_correction | state)
+
+Stage 2: Policy Gradient + 三层门控
+  1. Policy 采样 correction ~ π(·|state)
+  2. corrected_plan = ref_plan + correction
+  3. UpdateEvaluator 预测 gain/risk
+  4. SafetyGuard: 硬约束检查 → 违规 mask
+  5. STAPOGate: 正 A + 低 π + 低 H → 虚假更新静音
+  6. LearnedUpdateGate: 预测 gain 排序 → 选择 top-k 更新
+  7. filtered_loss = 重归一化(masked loss)
+  8. total_loss = filtered_loss - entropy_coef * H(π)
+  9. backward + step
+```
+
+### 推理流程
+
+```
+scene_token, ref_plan, conf = Adapter.extract(planner_output)
+correction = Policy.act(scene_token, ref_plan, conf)  # 确定性 mean
+corrected_plan = ref_plan + correction
+```
+
+**推理时没有 Scorer，没有 HUF，没有 accept/reject。Policy 自身就是修正专家。**
 
 ---
 
-## 三、Pipeline 整体流程
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           E2E_RL 完整训练 Pipeline                           │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-  ┌──────────────┐      ┌──────────────────┐      ┌────────────────────┐
-  │   E2E Planner │ ──→ │  Adapter (提取器) │ ──→ │  PlanningInterface │
-  │ (任意规划器)  │      │   (新建一个)      │      │    (统一接口)      │
-  └──────────────┘      └──────────────────┘      └─────────┬──────────┘
-                                                             │
-                    ┌────────────────────────────────────────┼────────────────┐
-                    │                                        │                │
-                    ▼                                        ▼                ▼
-           ┌────────────────┐                      ┌───────────────┐  ┌──────────┐
-           │ InterfaceRefiner│                      │  RewardProxy  │  │  Scorer  │
-           │   (残差网络)    │                      │  (奖励计算)   │  │ (可靠性) │
-           └───────┬────────┘                      └───────────────┘  └────┬─────┘
-                   │                                                   │
-                   │                    ┌──────────────────────────────┘
-                   │                    │
-                   ▼                    ▼
-           ┌────────────────┐    ┌──────────────┐
-           │  refined_plan   │    │   scores     │
-           │   (精炼轨迹)     │    │  (评分)      │
-           └────────────────┘    └──────┬───────┘
-                                       │
-                                       ▼
-                            ┌─────────────────────┐
-                            │ HarmfulUpdateFilter │
-                            │    (有害更新过滤)    │
-                            └──────────┬──────────┘
-                                       │
-                                       ▼
-                              ┌──────────────────┐
-                              │  Filtered Loss   │
-                              │   (过滤后损失)    │
-                              └──────────────────┘
-```
-
-### 三层筛选架构
-
-```
-输入: PlanningInterface (原始场景 + 轨迹)
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 1: Refiner (生成层)                                  │
-│  职责: 生成候选修正                                          │
-│  输出: refined_plan = reference_plan + residual             │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 2: Scorer (智能筛选层) ← 核心创新                    │
-│  职责: 预测 Gain↑ Risk↓                                    │
-│  架构: MLP 双头回归 (Gain Head + Risk Head)                │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 3: HUF (规则兜底层)                                  │
-│  职责: 硬性安全规则检查                                      │
-│  检查: 碰撞 / 偏离道路 / 突变幅度 / 舒适度                   │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-最终输出: 接受安全的修正 → 更优轨迹
-```
-
----
-
-## 四、项目结构
+## 项目结构
 
 ```
 E2E_RL/
-├── configs/                          # 配置文件
-│   ├── refiner_debug.yaml            # Refiner + HUF
-│   ├── refiner_only.yaml            # 纯 Refiner
-│   ├── refiner_plus_scorer.yaml     # Refiner + Scorer
-│   └── refiner_scorer_huf.yaml      # 完整三层系统
+├── correction_policy/          # 核心策略模块
+│   ├── actor.py               # GaussianCorrectionActor
+│   ├── policy.py              # 统一策略接口
+│   ├── losses.py              # BC + PG loss
+│   └── __init__.py
 │
-├── data/                             # 数据
-│   ├── vad_dataset.py               # VAD 数据集
-│   ├── dataloader.py               # 数据加载器
-│   └── vad_dumps/                  # 预处理数据 (100 samples)
+├── update_selector/            # 三层门控模块
+│   ├── update_evaluator.py    # UpdateEvaluator (预测 gain/risk)
+│   ├── safety_guard.py        # 硬性物理约束
+│   ├── stapo_gate.py           # STAPO 门控
+│   ├── learned_update_gate.py  # LearnedUpdateGate (基于 Evaluator)
+│   ├── candidate_generator.py  # 候选修正生成器
+│   └── __init__.py
 │
-├── planning_interface/               # 统一接口
-│   ├── interface.py                 # PlanningInterface 定义
-│   ├── extractor.py                 # 提取器 (需修改注册)
-│   └── adapters/                    # 规划器适配器 (需新建)
-│       ├── base_adapter.py          # 基类
-│       ├── vad_adapter.py           # VAD 适配器
-│       └── diffusiondrive_adapter.py
+├── rl_trainer/                 # RL 训练器
+│   ├── correction_policy_trainer.py
+│   └── __init__.py
 │
-├── refinement/                       # 轨迹精炼
-│   ├── interface_refiner.py         # InterfaceRefiner 模型
-│   └── reward_proxy.py              # 奖励代理
+├── planning_interface/         # 统一接口（模型无关）
+│   ├── interface.py           # PlanningInterface
+│   ├── extractor.py           # 提取器
+│   └── adapters/              # 规划器适配器
 │
-├── update_filter/                    # 筛选机制
-│   ├── scorer.py                    # UpdateReliabilityScorer
-│   ├── model.py                     # ReliabilityNet (MLP)
-│   ├── huf.py                       # HarmfulUpdateFilter
-│   └── config.py                    # HUF 配置
+├── data/                      # 数据加载
+│   ├── vad_dataset.py
+│   └── dataloader.py
 │
-├── trainers/                         # 训练器
-│   └── trainer_refiner.py          # 两阶段训练
+├── refinement/                 # 奖励计算
+│   └── reward_proxy.py        # safe_reward 函数
 │
-├── scripts/                          # 脚本
-│   ├── train_interface_refiner.py   # 训练入口
-│   ├── train_scorer.py             # 单独训练 Scorer
-│   └── compare_experiments.py       # 实验对比
+├── scripts/
+│   ├── train_correction_policy.py   # 策略训练入口
+│   ├── train_evaluator_v2.py       # UpdateEvaluator 训练入口
+│   └── train_with_learned_gate.py   # 保守集成训练
 │
-└── experiments/                      # 实验结果
-    ├── refiner_only/               # 纯 Refiner
-    ├── refiner_plus_scorer/        # Refiner + Scorer
-    ├── refiner_debug/              # Refiner + HUF
-    ├── refiner_scorer_huf/         # 完整三层系统
-    └── scorer_training/            # 单独训练的 Scorer
+└── configs/
+    ├── correction_policy.yaml     # 策略配置
+    └── update_evaluator.yaml      # Evaluator 配置
 ```
 
 ---
 
-## 五、核心模块说明
+## 核心模块说明
 
-### 1. PlanningInterface (统一接口)
+### 1. GaussianCorrectionActor
 
-封装所有规划器的输出为统一格式：
+高斯策略网络：
+- 输入: scene_token + reference_plan + plan_confidence
+- 输出: 高斯分布参数 (mean, std)
+- 训练时采样，推理时取均值
+- 正确的高斯熵计算: `H = 0.5 * log(2πe * σ²)`
+
+### 2. CorrectionPolicy
+
+统一策略接口：
+- `sample()`: 训练时采样
+- `evaluate()`: 给定 action 计算 log_prob + entropy
+- `act()`: 推理时确定性输出
+- `get_corrected_plan()`: 直接输出修正后轨迹
+
+### 3. UpdateEvaluator (新增)
+
+多目标回归网络，预测修正的收益和风险：
+
+**预测目标**：
+| 预测头 | 说明 | 权重 |
+|--------|------|------|
+| pred_gain | 修正带来的奖励增益 | 1.0 |
+| pred_collision | 碰撞风险变化 | 2.0 |
+| pred_offroad | 偏离道路风险变化 | 1.0 |
+| pred_comfort | 舒适度变化 | 0.5 |
+| pred_drift | 漂移风险变化 | 1.0 |
+
+**Loss 函数**：
+```
+loss = α * MSE(pred_gain, y_gain) + β * (risk_loss)
+```
+
+**输入特征**：
+- reference_plan: [B, T, 2] 参考轨迹
+- correction: [B, T, 2] 候选修正
+- scene_token: [B, 256] 场景编码
+
+### 4. SafetyGuard
+
+硬性物理约束检查：
+- 残差范数限制
+- 单步位移限制
+- 速度上限
+- 总位移限制
+
+### 5. STAPOGate
+
+STAPO 门控：
+- 识别虚假有益更新：正 A + 低 π + 低 H
+- 在 policy gradient loss 内部静音
+- 重归一化保持梯度期望
+
+### 6. LearnedUpdateGate (新增)
+
+基于 UpdateEvaluator 的学习型门控：
+- 使用预测 gain 排序候选修正
+- 只保留 top-k 更新用于梯度更新
+- 需要先训练好 UpdateEvaluator
+
+### 7. CandidateCorrector (新增)
+
+候选修正生成器，支持多种采样策略：
+
+| 策略 | 权重 | 说明 |
+|------|------|------|
+| zero | 10% | 零修正（无操作基线） |
+| deterministic | 5% | 确定性策略输出 |
+| policy_sample | 25% | 策略采样 |
+| gt_directed | 60% | GT 导向采样（小幅扰动） |
+
+**GT-Directed 采样**：
+```
+direction = gt_plan - ref_plan
+scale = uniform(0.1, 0.5)
+correction = direction * scale + noise
+```
+
+---
+
+## 三层防御级联
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    候选修正候选                          │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│              Layer 1: SafetyGuard                       │
+│  检查: 残差范数、单步位移、速度上限、总位移                │
+│  违规 → mask=0 (丢弃)                                   │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│              Layer 2: STAPOGate                          │
+│  检查: 正 advantage + 低 π + 低 entropy                 │
+│  虚假更新 → mask=0 (静音)                               │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│              Layer 3: LearnedUpdateGate                  │
+│  预测 gain 排序 → 保留 top-k                            │
+│  低 gain → mask=0                                       │
+└─────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────┐
+│                  Policy Gradient 更新                    │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 模型无关接口 (PlanningInterface)
+
+### 接口定义
 
 ```python
 @dataclass
 class PlanningInterface:
-    scene_token: torch.Tensor      # [B, D] 场景特征
-    reference_plan: torch.Tensor   # [B, T, 2] 参考轨迹
-    plan_confidence: torch.Tensor  # [B, 1] 置信度
-    candidate_plans: torch.Tensor   # [B, M, T, 2] 多模态候选
-    safety_features: Dict          # 安全特征
+    """统一的规划器输出接口"""
+    scene_token: torch.Tensor      # [B, D] 场景编码
+    reference_plan: torch.Tensor    # [B, T, 2] 参考轨迹 (UTM 坐标系)
+    plan_confidence: torch.Tensor   # [B, 1] 规划置信度
+    velocity: torch.Tensor          # [B, T, 2] 速度 (可选)
 ```
 
-### 2. InterfaceRefiner (残差网络)
+### 适配器模式
 
-学习对原始轨迹的小幅修正：
+新增规划器只需实现适配器：
 
 ```python
-refined_plan = reference_plan + residual
-# residual = Refiner(interface)  # 预测的修正量
-```
+class VADAdapter:
+    """VAD 规划器适配器"""
 
-### 3. ReliabilityScorer (学习型筛选器) ← 核心创新
+    def extract(self, vad_output: dict) -> PlanningInterface:
+        """从 VAD 输出提取 PlanningInterface"""
+        ...
 
-预测修正的好坏（双头回归）：
-
-```python
-pred_gain, pred_risk = scorer(interface, residual)
-# Gain: 预期奖励提升 (越大越好)
-# Risk: 预期风险 (越小越好)
-```
-
-### 4. HarmfulUpdateFilter (规则筛选器)
-
-基于规则的硬性安全检查：
-
-- 碰撞检测：修正后会不会撞车？
-- 偏离检测：修正后会不会离开道路？
-- 突变检测：修正幅度是否过大？
-
----
-
-## 六、伪 RL 训练范式
-
-### 本质：离线奖励加权监督学习
-
-```
-传统 RL (PPO/SAC):          E2E_RL (你的框架):
-┌─────────┐                 ┌─────────┐
-│ Policy  │ ──→ Env ──→ Reward ──→ Policy 更新
-│  (需要在线探索)            │ Planner │ ──→ Refiner ──→ Reward ──→ Refiner 更新
-└─────────┘                  │ (冻结)  │ ──→ (不需要环境交互)
-     ↑                        └─────────┘
-     └──────────────── 离线
-```
-
-### 两阶段训练
-
-| 阶段 | 方法 | 目标 |
-|------|------|------|
-| Stage 1 | 监督预热 | L1 Loss + 残差正则化 |
-| Stage 2 | 奖励加权 | 高奖励样本权重↑，低奖励样本权重↓ |
-
-### 奖励函数
-
-```
-total_reward = w_progress × r_progress 
-             - w_collision × p_collision 
-             - w_offroad × p_offroad 
-             - w_comfort × p_comfort
+    def restore(self, corrected_plan: torch.Tensor) -> dict:
+        """将修正后轨迹转回 VAD 格式"""
+        ...
 ```
 
 ---
 
-## 七、消融实验验证结果
+## 配置说明
 
-### 实验设计
+### CorrectionPolicy 配置
 
-| 实验 | Scorer | HUF | 说明 |
-|------|--------|-----|------|
-| **refiner_only** | ❌ | ❌ | 纯 Refiner，无筛选 |
-| **refiner_plus_scorer** | ✅ | ❌ | 学习型筛选，无规则兜底 |
-| **refiner_debug** | ❌ | ✅ | 规则筛选，无学习模型 |
-| **refiner_scorer_huf** | ✅ | ✅ | 完整三层架构 |
+```yaml
+# configs/correction_policy.yaml
+policy:
+  scene_dim: 256
+  plan_len: 6
+  hidden_dim: 256
+  dropout: 0.1
 
-### 性能对比
+training:
+  bc_epochs: 10
+  rl_epochs: 100
+  bc_lr: 1e-4
+  rl_lr: 5e-5
+  entropy_coef: 0.01
 
-| 排名 | 实验 | Scorer | HUF | Reward | Stage 1 Loss |
-|------|------|--------|-----|--------|--------------|
-| 🥇 1 | **refiner_only** | ❌ | ❌ | **-0.43** | 2.42 |
-| 🥈 2 | **refiner_scorer_huf** | ✅ | ✅ | -0.45 | 2.55 |
-| 🥉 3 | **refiner_plus_scorer** | ✅ | ❌ | -0.59 | 2.58 |
-| 4 | **refiner_debug** | ❌ | ✅ | -0.68 | 2.74 |
-
-### 关键发现
-
-1. **无筛选效果最好**：纯 Refiner 表现最优，Reward = -0.43
-
-2. **Scorer 的负面影响**：
-   - refiner_plus_scorer (-0.59) 比 refiner_only (-0.43) 差 37%
-   - 可能原因：Scorer 过于保守，拒绝了太多"好的修正"
-
-3. **HUF 的负面影响**：
-   - refiner_debug (-0.68) 比 refiner_only (-0.43) 差 58%
-   - 可能原因：规则过于严格
-
-4. **组合有一定补偿**：
-   - refiner_scorer_huf (-0.45) 接近最优
-   - Scorer + HUF 的组合比单独使用好
-
-### 结论
-
+gates:
+  safety_guard:
+    enabled: true
+    residual_limit: 2.0
+    step_limit: 1.0
+  stapo_gate:
+    enabled: true
+    prob_threshold: 0.3
+    entropy_threshold: 0.5
+  learned_update_gate:
+    enabled: false  # 保守集成时设为 true
+    retention_ratio: 0.3
+    evaluator_ckpt: null
 ```
-筛选机制验证结论:
-├── ❌ 当前筛选策略过于保守
-├── ❌ 拒绝了太多有价值的修正
-├── ✅ Scorer + HUF 组合优于单独使用
-└── 💡 建议：调整阈值，降低保守程度
+
+### UpdateEvaluator 配置
+
+```yaml
+# configs/update_evaluator.yaml
+model:
+  scene_dim: 256
+  plan_len: 6
+  hidden_dim: 256
+  dropout: 0.1
+
+risk_weights:
+  collision: 2.0
+  offroad: 1.0
+  comfort: 0.5
+  drift: 1.0
+
+training:
+  batch_size: 128
+  lr: 5e-5
+  weight_decay: 1e-4
+  grad_clip: 1.0
+  epochs: 50
+  eval_every: 5
 ```
 
 ---
 
-## 八、训练与评估
+## 训练命令
 
-### 训练命令
+### 1. CorrectionPolicy 训练
 
 ```bash
 # 激活环境
@@ -291,218 +318,139 @@ conda activate e2e_rl
 # 设置路径
 export PYTHONPATH="/mnt:$PYTHONPATH"
 
-# 纯 Refiner (Baseline)
-python -m E2E_RL.scripts.train_interface_refiner \
-    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/refiner_only.yaml
-
-# Refiner + Scorer
-python -m E2E_RL.scripts.train_interface_refiner \
-    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/refiner_plus_scorer.yaml
-
-# Refiner + HUF
-python -m E2E_RL.scripts.train_interface_refiner \
-    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/refiner_debug.yaml
-
-# 完整三层系统
-python -m E2E_RL.scripts.train_interface_refiner \
-    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/refiner_scorer_huf.yaml
+# 完整训练（BC + RL）
+python -m E2E_RL.scripts.train_correction_policy \
+    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/correction_policy.yaml \
+    --output_dir /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/correction_policy
 ```
 
-### 查看实验对比
+### 2. UpdateEvaluator 训练
 
 ```bash
-python /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/scripts/compare_experiments.py
+# 训练 UpdateEvaluator（使用 5000 样本增强数据集）
+python /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/scripts/train_evaluator_v2.py
+```
+
+### 3. 保守集成训练
+
+```bash
+# SafetyGuard + STAPOGate + LearnedUpdateGate
+python /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/scripts/train_with_learned_gate.py
+```
+
+### 4. Dry run
+
+```bash
+# 仅构建模型验证
+python -m E2E_RL.scripts.train_correction_policy \
+    --config /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/configs/correction_policy.yaml \
+    --dry_run
 ```
 
 ---
 
-## 九、核心设计原则
+## 训练注意事项
 
-| 设计点 | 说明 |
-|--------|------|
-| **模型无关** | 通过 Adapter 模式适配任意 E2E 规划器 |
-| **外挂框架** | 无需修改你的模型，只需新建 Adapter |
-| **统一接口** | PlanningInterface 是所有规划器输出的统一表示 |
-| **残差学习** | Refiner 不从头预测，只学习微调 |
-| **离线可用** | 奖励代理支持离线计算 |
-| **安全优先** | 多层筛选机制确保安全 |
+### 1. UpdateEvaluator 训练
 
----
+| 问题 | 现象 | 解决方案 |
+|------|------|----------|
+| 正 gain 比例过低 | < 30% | 调整 gt_directed scale，使用加权采样 |
+| Spearman 相关性低 | < 0.3 | 增加训练数据量，检查标签质量 |
+| 过拟合 | val loss 上升 | 减少 epochs，增加 dropout |
 
-## 十、集成新 E2E 模型指南
+### 2. 三层门控配置
 
-### 4步快速接入
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                     E2E_RL 外挂框架 - 4步集成                                │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-Step 1: 分析你的模型输出格式
-         ↓
-Step 2: 新建 Adapter 文件 (1个文件)
-         ↓
-Step 3: 注册 Adapter (修改2处)
-         ↓
-Step 4: 新建配置文件 (1个文件)
-
-其余全部复用，无需修改！
-```
-
-### Step 1: 分析模型输出
-
-```python
-# 你的模型输出结构（任意格式）
-your_model_outputs = {
-    'bev_features': torch.Tensor,      # [B, H, W, C]
-    'trajectory': torch.Tensor,        # [B, T, 3]
-    'mode_probs': torch.Tensor,       # [B, M]
-    'object_boxes': torch.Tensor,     # 检测框
-    'map_polygons': torch.Tensor,     # 地图多边形
-}
-```
-
-### Step 2: 新建 Adapter
-
-```python
-# 文件: E2E_RL/planning_interface/adapters/your_model_adapter.py
-
-from .base_adapter import BasePlanningAdapter
-import torch
-
-class YourModelAdapter(BasePlanningAdapter):
-    """YourModel → PlanningInterface 适配器"""
-    
-    def __init__(self, scene_pool='mean', ego_fut_mode=3, fut_ts=6):
-        self.scene_pool = scene_pool
-        self.ego_fut_mode = ego_fut_mode
-        self.fut_ts = fut_ts
-    
-    def extract_scene_token(self, planner_outputs):
-        """提取场景 token: [B, D]"""
-        bev = planner_outputs['bev_features']  # [B, H, W, C]
-        
-        # 转为 [B, N, D]
-        if bev.dim() == 4:
-            B, H, W, C = bev.shape
-            bev = bev.reshape(B, H * W, C)
-        
-        # 池化
-        if self.scene_pool == 'mean':
-            return bev.mean(dim=1)
-        elif self.scene_pool == 'ego_local':
-            center = H // 2
-            k = 16
-            return bev[:, (center-k)*W + center:(center+k)*W + center, :].mean(dim=1)
-        return bev.mean(dim=1)
-    
-    def extract_reference_plan(self, planner_outputs, ego_fut_cmd=None):
-        """提取轨迹: [B, T, 2]"""
-        traj = planner_outputs['trajectory']  # [B, T, 3]
-        xy = traj[..., :2]  # 取 x, y
-        
-        if 'mode_probs' in planner_outputs:
-            probs = planner_outputs['mode_probs']
-            return xy, torch.cat([xy.unsqueeze(1)] * probs.shape[1], dim=1)
-        
-        return xy, None
-    
-    def extract_plan_confidence(self, planner_outputs, ego_fut_cmd=None):
-        """提取置信度: [B, 1]"""
-        if 'mode_probs' in planner_outputs:
-            probs = planner_outputs['mode_probs']
-            return probs.max(dim=-1).values.unsqueeze(-1)
-        return torch.ones(planner_outputs['trajectory'].shape[0], 1)
-    
-    def extract_safety_features(self, planner_outputs):
-        """提取安全特征"""
-        safety = {}
-        if 'object_boxes' in planner_outputs:
-            n_objects = planner_outputs['object_boxes'].shape[1]
-            safety['object_density'] = torch.tensor([n_objects])
-        return safety if safety else None
-```
-
-### Step 3: 注册 Adapter
-
-编辑 `adapters/__init__.py`:
-```python
-from .your_model_adapter import YourModelAdapter
-```
-
-编辑 `planning_interface/extractor.py`:
-```python
-# 在 PlanningInterfaceExtractor.from_config 中添加
-elif adapter_type == 'your_model':
-    from .adapters import YourModelAdapter
-    return cls(YourModelAdapter(**kwargs))
-```
-
-### Step 4: 新建配置文件
-
+**保守集成配置（推荐起步）**：
 ```yaml
-# 文件: configs/refiner_your_model.yaml
-
-model:
-  scene_dim: 256
-  plan_len: 12
-  hidden_dim: 256
-
-adapter:
-  type: your_model       # ← 你的适配器类型
-  scene_pool: ego_local
-
-data:
-  data_dir: /path/to/your/dumps
-  batch_size: 4
-
-training:
-  supervised:
-    epochs: 5
-    lr: 0.001
-  reward_weighted:
-    epochs: 3
-    lr: 0.0005
-
-output_dir: /path/to/your/experiment
+safety_guard:
+  enabled: true
+stapo_gate:
+  enabled: false  # 先禁用观察效果
+learned_update_gate:
+  enabled: true
+  retention_ratio: 1.0  # 初始 100% 保留，观察预测分布
 ```
 
-### 完整文件清单
+### 3. 候选采样策略
 
-| 操作 | 文件 | 说明 |
-|------|------|------|
-| **新建** | `adapters/your_model_adapter.py` | Adapter 实现 |
-| **修改** | `adapters/__init__.py` | 导入你的 Adapter |
-| **修改** | `extractor.py` | 注册适配器类型 |
-| **新建** | `configs/refiner_your_model.yaml` | 配置文件 |
+- **GT-Directed 采样权重 60%** 是关键，确保生成足够多正 gain 样本
+- **Scale 范围 0.1-0.5** 产生小幅修正，更接近真实有效修正
+- **Zero 采样 10%** 提供无操作基线
 
-**其余文件全部复用，无需修改！**
+### 4. 数据集要求
+
+- 原始 VAD dump 数据需包含: `reference_plan`, `gt_plan`, `scene_token`
+- 增强数据集通过噪声注入扩展样本量
+- manifest.json 记录样本列表
 
 ---
 
-## 十一、总结
+## 新旧模块对应关系
 
-E2E_RL 是一个**模型无关的外挂式轨迹精炼框架**：
+| 旧模块（废弃） | 新模块 | 说明 |
+|--------------|--------|------|
+| `InterfaceRefiner` | `CorrectionPolicy` | 确定性 → 高斯策略 |
+| `supervised_refinement_loss` | `behavioral_cloning_loss` | BC 预热 |
+| `reward_weighted_refinement_loss` | `policy_gradient_loss` | PG loss |
+| `HarmfulUpdateFilter` | `SafetyGuard` + `STAPOGate` + `LearnedUpdateGate` | 后验裁决 → 训练时梯度过滤 |
+| `UpdateReliabilityScorer` | `UpdateEvaluator` | 新增学习型评分器 |
+| `ReliabilityNet` | 移除 | 不再需要 |
+| `InterfaceRefinerTrainer` | `CorrectionPolicyTrainer` | 重写训练循环 |
 
+---
+
+## STAPO Gate 设计说明
+
+STAPO (Self-Taught Policy Optimization) 的核心思想：
+
+**识别虚假有益更新**：具有正 advantage 但概率低、熵低的更新。这类更新看起来"有益"，但实际上是策略分布过尖导致的噪声。
+
+**处理方式**：在 policy gradient loss 内部静音这类更新，并重归一化 loss。
+
+**公式**：
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         E2E_RL 是什么？                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  ✓ 模型无关外挂: 通过 Adapter 适配任意 E2E 规划器                            │
-│  ✓ 三层筛选架构: Refiner → Scorer → HUF                                    │
-│  ✓ 混合训练范式: 监督预热 + 奖励加权精炼                                     │
-│  ✓ 离线可用: 奖励代理支持离线计算                                            │
-│  ✓ 安全优先: 多层筛选机制确保安全                                          │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+虚假有益更新 = (A > 0) AND (π(a|s) < τ_prob) AND (H < τ_entropy)
+filtered_loss = mask * pg_loss * (n_total / n_active)
+```
 
-集成新模型只需要:
-┌─────────────────────────────────────────────────────────────┐
-│  1. 新建 1 个 Adapter 文件                                   │
-│  2. 修改 2 处注册代码                                        │
-│  3. 新建 1 个配置文件                                        │
-│                                                             │
-│  其余全部复用，无需修改！                                    │
-└─────────────────────────────────────────────────────────────┘
+---
+
+## UpdateEvaluator Ranking Metrics
+
+训练过程中监控以下指标：
+
+| 指标 | 目标 | 说明 |
+|------|------|------|
+| spearman_gain | > 0.3 | 预测 gain 与真实 gain 的 Spearman 相关性 |
+| kendall_gain | > 0.3 | 预测 gain 与真实 gain 的 Kendall tau |
+| retained_gain > filtered_gain | ✓ | 保留样本的 gain 应高于丢弃样本 |
+| retained_risk < filtered_risk | ✓ | 保留样本的 risk 应低于丢弃样本 |
+
+**达标参考（v4_5k_samples）**：
+- Spearman: 0.736 ✓
+- Kendall: 0.581 ✓
+- 训练数据: 9600 样本
+- 正 gain 比例: ~26%
+
+---
+
+## 集成新 E2E 模型
+
+只需新建一个 Adapter，参考 `planning_interface/adapters/` 下的示例。
+
+```python
+# 新建 your_model_adapter.py
+from E2E_RL.planning_interface.extractor import BaseExtractor
+
+class YourModelAdapter(BaseExtractor):
+    """YourModel 规划器适配器"""
+
+    def extract(self, model_output: dict) -> PlanningInterface:
+        """从 YourModel 输出提取 PlanningInterface"""
+        return PlanningInterface(
+            scene_token=self._encode_scene(model_output),
+            reference_plan=model_output['trajectory'],
+            plan_confidence=model_output['confidence'],
+        )
 ```

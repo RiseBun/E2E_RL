@@ -1,0 +1,56 @@
+# =============================================================================
+# 消融实验 A: Baseline (无筛选)
+# =============================================================================
+
+model:
+  scene_dim: 256
+  plan_len: 6
+  hidden_dim: 256
+  dropout: 0.1
+  log_std_min: -5.0
+  log_std_max: 2.0
+  action_scale: 1.0
+
+# ❌ 禁用所有筛选
+safety_guard:
+  enabled: false
+
+stapo_gate:
+  enabled: false
+
+data:
+  data_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/data/vad_dumps
+  batch_size: 8
+  num_workers: 0
+
+training:
+  bc:
+    enabled: true
+    epochs: 5
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+    grad_clip: 1.0
+
+  rl:
+    enabled: true
+    epochs: 20
+    lr: 5.0e-5
+    weight_decay: 1.0e-4
+    grad_clip: 1.0
+    entropy_coef: 0.01
+
+  scheduler:
+    type: cosine
+    T_max: 30
+    eta_min: 1.0e-06
+
+  reward:
+    dt: 0.5
+    w_progress: 1.0
+    w_collision: 0.5
+    w_offroad: 0.3
+    w_comfort: 0.1
+
+output_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/ablation_baseline
+save_every: 5
+log_interval: 10

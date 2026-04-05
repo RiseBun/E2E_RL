@@ -1,0 +1,86 @@
+# =============================================================================
+# CorrectionPolicy 两阶段训练配置
+#
+# 架构：GaussianCorrectionActor + Policy Gradient + STAPO Gate
+#
+# Stage 1: Behavioral Cloning 预热
+#   - 用 GT correction 做监督学习
+#   - Loss = -log π(gt_correction | state)
+#
+# Stage 2: Policy Gradient + STAPO Gate
+#   - Policy 采样 correction
+#   - Advantage = safe_reward(corrected) - safe_reward(ref)
+#   - Loss = STAPO(filtered(-A * log π(a|s))) - entropy_coef * H
+# =============================================================================
+
+# ---- 模型配置 ----
+model:
+  scene_dim: 256
+  plan_len: 12
+  hidden_dim: 256
+  dropout: 0.1
+  log_std_min: -5.0          # 对数标准差下限
+  log_std_max: 2.0           # 对数标准差上限
+  action_scale: 1.0          # 修正量缩放因子
+
+# ---- Safety Guard 配置 ----
+safety_guard:
+  enabled: true               # ✅ 启用安全约束
+  max_residual_norm: 5.0      # 残差最大 L2 范数
+  max_step_disp: 2.0          # 最大单步位移
+  max_speed: 15.0            # 最大速度 m/s
+  max_total_disp: 10.0        # 修正后轨迹与参考轨迹的终点最大距离
+  dt: 0.5                     # 时间步间隔
+
+# ---- STAPO Gate 配置 ----
+stapo_gate:
+  enabled: true               # ✅ 启用 STAPO gate
+  advantage_threshold: 0.0   # A > 0 视为正 advantage
+  probability_threshold: 0.1  # π(a|s) < 0.1 视为低概率
+  entropy_threshold: 0.5      # 归一化熵 < 0.5 视为低熵
+  entropy_normalization: max  # max / none — 熵归一化方式
+  min_retention_ratio: 0.1   # 最小保留比例（防止全部静音）
+  use_combined_threshold: true  # 综合阈值模式
+
+# ---- 数据配置 ----
+data:
+  data_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/data/vad_dumps
+  batch_size: 8
+  num_workers: 0
+
+# ---- Stage 1: BC 预热 ----
+training:
+  bc:
+    enabled: true
+    epochs: 5
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+    grad_clip: 1.0
+
+  # ---- Stage 2: RL 训练 ----
+  rl:
+    enabled: true
+    epochs: 20
+    lr: 5.0e-5              # RL 通常用更小的学习率
+    weight_decay: 1.0e-4
+    grad_clip: 1.0
+    entropy_coef: 0.01       # 熵正则化系数
+
+  # 学习率调度器
+  scheduler:
+    type: cosine             # cosine / step / none
+    T_max: 30
+    eta_min: 1.0e-06
+
+  # 奖励配置
+  reward:
+    dt: 0.5
+    w_progress: 1.0
+    w_collision: 0.5
+    w_offroad: 0.3
+    w_comfort: 0.1
+
+# ---- 日志 / 保存 ----
+output_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/correction_policy
+save_every: 5
+log_interval: 10
