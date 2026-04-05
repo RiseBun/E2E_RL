@@ -1,0 +1,120 @@
+# =============================================================================
+# Refiner + Scorer + HUF 三层筛选实验配置
+# 
+# 三层架构:
+#   Layer 1: Refiner   → 生成候选修正
+#   Layer 2: Scorer    → 预测 Gain↑ Risk↓
+#   Layer 3: HUF       → 规则安全兜底
+# =============================================================================
+
+# ---- 模型配置 ----
+model:
+  scene_dim: 256
+  plan_len: 12          # Refiner 用 12
+  hidden_dim: 128
+  dropout: 0.1
+  output_norm: false
+
+# ---- Scorer (ReliabilityNet) 配置 ----
+reliability_net:
+  enabled: true                    # ✅ 启用 Scorer
+  pretrained_path: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/scorer_training/best_model.pth  # 加载预训练 Scorer
+  trainable: false                 # ❌ Scorer 冻结，不继续训练（仅推理）
+  scene_dim: 256
+  plan_len: 6                     # Scorer 用 6（必须匹配预训练权重）
+  safety_feat_dim: 0
+  hidden_dim: 128
+  dropout: 0.1
+  lr: 0.0001
+  weight_decay: 0.0001
+
+# ---- HUF (规则筛选) 配置 ----
+huf:
+  enabled: true                   # ✅ 启用 HUF 兜底
+  mode: hard                       # hard / soft
+  
+  # 安全阈值
+  max_residual_norm: 5.0          # 残差最大范数
+  max_step_disp: 2.0              # 最大单步位移
+  collision_guard: 0.1            # 碰撞安全边界
+  delta_safe_margin: 0.005        # 奖励安全边界
+  
+  # 软模式权重
+  min_retention_ratio: 0.3
+  soft_temperature: 1.0
+  
+  # 不确定性阈值
+  tau_uncertainty: 0.7
+  tau_support: 0.3
+  tau_drift: 0.8
+  
+  # Lambda 权重
+  lambda_collision: 2.0
+  lambda_offroad: 1.0
+  lambda_comfort: 0.5
+  lambda_drift: 1.0
+  support_alpha: 1.0
+  
+  # 启发式权重
+  w_mode_variance: 0.3
+  w_residual_mag: 0.3
+  w_residual_var: 0.2
+  w_confidence: 0.5
+  w_curvature: 0.3
+  w_comfort: 0.4
+  
+  # 最终分数权重
+  w_uncertainty_final: 0.4
+  w_support_final: 0.3
+  w_drift_final: 0.3
+
+# ---- Hard Case Mining 配置 ----
+hard_case:
+  enabled: true
+  top_ratio: 0.2                   # 挖掘前 20% 困难样本
+  error_weight: 1.0
+  uncertainty_weight: 0.5
+  collision_weight: 0.5
+
+# ---- 数据配置 ----
+data:
+  data_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/data/vad_dumps
+  batch_size: 4
+  num_workers: 0
+
+# ---- 训练配置 ----
+training:
+  # Stage 1: 监督预热
+  supervised:
+    epochs: 5
+    lr: 0.001
+    weight_decay: 0.0001
+    grad_clip: 1.0
+    residual_reg_weight: 0.01
+  
+  # Stage 2: 奖励加权精炼
+  reward_weighted:
+    epochs: 3
+    lr: 0.0005
+    weight_decay: 0.0001
+    grad_clip: 1.0
+    residual_reg_weight: 0.01
+  
+  # 学习率调度器
+  scheduler:
+    type: cosine
+    T_max: 30
+    eta_min: 1.0e-06
+  
+  # 奖励配置
+  reward:
+    dt: 0.5
+    w_progress: 1.0
+    w_collision: 0.5
+    w_offroad: 0.3
+    w_comfort: 0.1
+
+# ---- 日志 / 保存 ----
+output_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/refiner_scorer_huf
+save_every: 5
+log_interval: 10

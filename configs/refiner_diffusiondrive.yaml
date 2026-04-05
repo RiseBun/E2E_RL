@@ -1,0 +1,70 @@
+# InterfaceRefiner 配置 - DiffusionDrive 适配
+# DiffusionDrive 与 VAD 的关键差异:
+#   - 轨迹: 8 步 (vs VAD 6 步)
+#   - BEV: 语义图 [7, 128, 256] (vs VAD embedding [40000, 256])
+#   - 多模态: 标准输出为单轨迹 (vs VAD 3 模式)
+
+# ---- 模型配置 ----
+model:
+  # scene_dim 取决于池化方式:
+  #   mean/max: 7 (bev_semantic_classes)
+  #   grid 4x4: 7 * 16 = 112
+  #   flatten: 7 * 32 = 224
+  scene_dim: 112           # grid 4x4 池化
+  plan_len: 16             # fut_ts * 2 = 8 * 2
+  hidden_dim: 128
+  dropout: 0.1
+  output_norm: false
+
+# ---- Adapter 配置 ----
+adapter:
+  type: diffusiondrive
+  scene_pool: grid
+  fut_ts: 8
+  grid_size: 4
+  bev_semantic_classes: 7
+
+# ---- 训练配置 ----
+training:
+  supervised:
+    epochs: 20
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    residual_reg_weight: 0.01
+    grad_clip: 1.0
+
+  reward_weighted:
+    epochs: 10
+    lr: 5.0e-4
+    weight_decay: 1.0e-4
+    residual_reg_weight: 0.01
+    grad_clip: 1.0
+
+  reward:
+    w_progress: 1.0
+    w_collision: 0.5
+    w_offroad: 0.3
+    w_comfort: 0.1
+    dt: 0.5
+
+  scheduler:
+    type: cosine
+    T_max: 30
+    eta_min: 1.0e-6
+
+# ---- Hard Case Mining ----
+hard_case:
+  error_weight: 1.0
+  uncertainty_weight: 0.5
+  collision_weight: 0.5
+  top_ratio: 0.2
+
+# ---- 数据配置 ----
+data:
+  batch_size: 8
+  num_workers: 2
+
+# ---- 日志 / 保存 ----
+output_dir: /mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/refiner_diffusiondrive
+save_every: 5
+log_interval: 10
