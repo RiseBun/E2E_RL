@@ -6,7 +6,6 @@
 
 ## 目录
 
-- [快速开始](#快速开始)
 - [Pipeline](#pipeline)
 - [运行示例 (VAD)](#运行示例-vad)
 - [项目结构](#项目结构)
@@ -19,29 +18,7 @@
 
 ---
 
-## 快速开始
 
-```bash
-cd /mnt/cpfs/prediction/lipeinan/RL/E2E_RL
-
-# 1. 准备 dump 数据
-python scripts/dump_vad_inference.py --config projects/configs/VAD/VAD_base_e2e.py \
-    --checkpoint /path/to/vad_epoch_xxx.pth --output_dir data/vad_dumps
-
-# 2. 训练 UpdateEvaluator（必需）
-python scripts/train_evaluator_v2.py --output_dir experiments/update_evaluator
-
-# 3. 训练 CorrectionPolicy
-python scripts/expC_relaxed.py --output_dir experiments/correction_policy
-
-# 4. 推理
-python scripts/inference_with_correction.py \
-    --checkpoint experiments/correction_policy/policy_final.pth \
-    --evaluator experiments/update_evaluator/update_evaluator_final.pth \
-    --data_dir data/vad_dumps
-```
-
----
 
 ## Pipeline
 
