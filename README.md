@@ -280,6 +280,22 @@ class YourModelAdapter(BaseExtractor):
 
 ### 训练流程
 
+#### 数据加载
+
+训练前需要先准备好 dump 数据，然后使用通用 DataLoader 加载：
+
+```python
+from E2E_RL.data.dataloader import build_planner_dataloader
+
+# VAD 数据
+loader = build_planner_dataloader('data/vad_dumps', adapter_type='vad')
+
+# DiffusionDrive 数据
+loader = build_planner_dataloader('data/diffusion_dumps', adapter_type='diffusiondrive')
+```
+
+**核心设计**：Dataset 只负责加载原始数据，坐标系转换由 Adapter 处理。新模型只需创建新的 Adapter。
+
 #### Stage 1: Behavioral Cloning 预热
 
 ```
