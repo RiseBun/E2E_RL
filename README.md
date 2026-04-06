@@ -49,7 +49,7 @@
 cd ~/E2E_RL/projects
 
 # 克隆 VAD
-git clone https://github.com/HK-Auto/VAD.git VAD
+git clone  VAD项目路径
 
 # 安装依赖
 cd VAD && pip install -r requirements.txt
@@ -57,7 +57,7 @@ cd VAD && pip install -r requirements.txt
 
 ### Step 2: Dump 数据
 
-将模型放到 `projects/` 目录，然后运行我们提供的 dump 脚本：
+运行提供的 dump 脚本，可以收集模型原始输出：
 
 ```bash
 cd ~/E2E_RL
@@ -96,7 +96,65 @@ GT终点距原点: tensor([17.82, 18.37, 19.64])
 Ref终点距原点: tensor([5.52, 27.34, 22.59])
 ```
 
-### Step 4: 训练 UpdateEvaluator（必需）
+### Step 4: 数据增强（可选）
+
+```bash
+cd ~/E2E_RL
+
+python scripts/augment_vad_data.py \
+    --input_dir data/vad_dumps \
+    --output_dir data/vad_dumps_full \
+    --samples_per_original 50 \
+    --noise_scale 0.1 \
+    --max_samples 5000
+```
+
+**参数说明**:
+- `--input_dir`: 原始真实数据目录（dump_vad_inference.py 的输出）
+- `--output_dir`: 增强后的数据目录
+- `--samples_per_original`: 每个原始样本生成多少个增强样本（默认 50）
+- `--noise_scale`: 噪声尺度，控制扰动大小（默认 0.1）
+- `--max_samples`: 最大样本数（默认 5000）
+
+**增强策略**:
+```python
+# 对 reference_plan 添加高斯噪声
+noise = torch.randn_like(reference_plan) * noise_scale
+augmented_reference_plan = reference_plan + noise
+
+# 对 scene_token 添加高斯噪声
+noise = torch.randn_like(scene_token) * noise_scale
+augmented_scene_token = scene_token + noise
+
+# GT 保持不变
+gt_plan = gt_plan  # 不添加噪声
+```
+
+**预期输出**:
+```
+========================================
+VAD Dump 数据扩充
+========================================
+输入目录: data/vad_dumps
+输出目录: data/vad_dumps_full
+每个原始样本扩充: 50 个
+噪声尺度: 0.1
+目标样本数: 5000
+========================================
+
+找到 101 个原始样本
+扩充数据: 100%|██████████| 101/101 [00:30<00:00]
+
+扩充完成！共生成 5001 个样本
+输出目录: data/vad_dumps_full
+```
+
+> **⚠️ 注意**: 
+> - 数据增强是可选的，如果已经有足够的真实数据（> 1000 帧），可以跳过
+> - 增强数据包含人工噪声，最终性能可能略低于纯真实数据
+> - 推荐：先用增强数据快速验证，再用真实数据微调
+
+### Step 5: 训练 UpdateEvaluator
 
 **UpdateEvaluator 预测修正的 gain 和 risk，用于筛选高质量训练样本。**
 > 实测：正 gain 样本仅占 26%，73% 的修正是无效的，必须筛选。
@@ -105,11 +163,12 @@ Ref终点距原点: tensor([5.52, 27.34, 22.59])
 cd /mnt/cpfs/prediction/lipeinan/RL/E2E_RL
 
 python scripts/train_evaluator_v2.py \
+    --data_dir data/原始或数据增强
     --output_dir experiments/update_evaluator_v4_5k_samples \
     --num_epochs 50
 ```
 
-### Step 5: 训练 CorrectionPolicy
+### Step 6: 训练 CorrectionPolicy
 
 三种实验配置可选：
 
@@ -124,10 +183,10 @@ python scripts/expB_relaxed.py --num_epochs 15 --bc_epochs 3
 python scripts/expC_relaxed.py --num_epochs 15 --bc_epochs 3
 ```
 
-### Step 6: 推理
+### Step 7: 推理
 
 ```bash
-cd /mnt/cpfs/prediction/lipeinan/RL/E2E_RL
+cd ~/E2E_RL
 
 python scripts/inference_with_correction.py \
     --checkpoint experiments/ab_comparison_v2/expC_learned_gate/policy_final.pth \
