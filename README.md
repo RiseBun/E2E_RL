@@ -104,7 +104,7 @@ GT终点距原点: tensor([17.82, 18.37, 19.64])
 Ref终点距原点: tensor([5.52, 27.34, 22.59])
 ```
 
-### Step 3: 训练 UpdateEvaluator（必需）
+### Step 3: 训练 UpdateEvaluator（可学习的筛选器）
 
 **UpdateEvaluator 预测修正的 gain（收益）和 risk（风险），用于筛选高质量训练样本。**
 > 实测：正 gain 样本仅占 26%，73% 的修正是无效的，必须筛选才能有效训练。
