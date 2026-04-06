@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import torch
 from torch.utils.data import DataLoader, Dataset
+
+# 添加项目根目录到 sys.path
+_project_root = str(Path(__file__).resolve().parents[2])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from E2E_RL.planning_interface.interface import PlanningInterface
 
@@ -69,15 +75,20 @@ class VADDumpDataset(Dataset):
                 # 如果还是 dict，尝试平均其值
                 scene_token = torch.randn(256).float()
             
-            # 参考轨迹：使用第一个预测模式或从 ego_fut_trajs 的均值
+            # 参考轨迹：使用第一个预测模式
+            # 重要：ego_fut_preds 是位移增量，需要 cumsum 转 ego-centric 绝对坐标
             ego_fut_preds = data.get('ego_fut_preds', torch.randn(3, 6, 2))  # [M, T, 2]
             if ego_fut_preds.shape[0] > 0:
-                reference_plan = ego_fut_preds[0].float()  # 用最可能的模式 [6, 2]
+                # cumsum 转 ego-centric 绝对坐标（从原点开始）
+                reference_plan = ego_fut_preds[0].float().cumsum(dim=0)  # [6, 2]
             else:
                 reference_plan = torch.randn(6, 2).float()
 
-            # 地面真值轨迹
-            gt_plan = data.get('ego_fut_trajs', torch.randn(6, 2)).float()  # [6, 2]
+            # 地面真值轨迹：
+            # - dump 保存的是全局坐标（dump_vad_inference.py 中做过 cumsum）
+            # - 需要转换到 ego-centric 坐标系：减去起点位置
+            gt_plan_global = data.get('ego_fut_trajs', torch.randn(6, 2)).float()  # [6, 2]
+            gt_plan = gt_plan_global - gt_plan_global[0]  # 转 ego-centric 坐标（从原点开始）
 
             # 计算置信度：从多模式中计算（可用 softmax）
             all_scores = data.get('all_cls_scores_last', torch.randn(300, 10))  # [N, K]
@@ -107,7 +118,7 @@ class VADDumpDataset(Dataset):
 
             return {
                 'interface': interface,
-                'gt_plan': gt_plan,
+                'gt_plan': gt_plan,  # 累积坐标，与 dump 保存格式一致
                 'plan_mask': plan_mask,
                 'metadata': sample_info,
             }

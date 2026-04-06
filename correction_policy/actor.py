@@ -70,7 +70,8 @@ class GaussianCorrectionActor(nn.Module):
         self.log_std_head = nn.Linear(hidden_dim, self.action_dim)
         
         # 可学习的初始对数标准差
-        self.log_std = nn.Parameter(torch.zeros(1, self.action_dim))
+        # 初始 log_std=-2.0 对应 std≈0.14，适合轨迹修正
+        self.log_std = nn.Parameter(torch.full((1, self.action_dim), -2.0))
         
     def forward(
         self,

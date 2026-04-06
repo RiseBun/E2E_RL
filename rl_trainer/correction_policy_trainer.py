@@ -178,13 +178,14 @@ class CorrectionPolicyTrainer:
 
         训练流程：
         1. Policy 采样 correction
-        2. 计算 Advantage
+        2. 计算 Advantage + 各分项 reward/risk
         3. 计算 per-sample PG loss
         4. Safety Guard 检查（只记录，不过滤）
         5. STAPO Gate 过滤（规则基线）
         6. Learned Gate 过滤（高级判断）
-        7. Entropy bonus
-        8. Backward + step
+        7. 记录 retained/filtered 在线统计
+        8. Entropy bonus
+        9. Backward + step
 
         Args:
             dataloader: 数据加载器
@@ -203,6 +204,13 @@ class CorrectionPolicyTrainer:
             'stapo_retention': 0.0,
             'learned_retention': 0.0,
             'safety_pass_ratio': 0.0,
+            # ---- 在线统计：retained vs filtered ----
+            'retained_advantage_mean': 0.0,
+            'filtered_advantage_mean': 0.0,
+            'retained_risk_mean': 0.0,
+            'filtered_risk_mean': 0.0,
+            'retained_progress_mean': 0.0,
+            'filtered_progress_mean': 0.0,
         }
         num_batches = 0
 
@@ -277,7 +285,46 @@ class CorrectionPolicyTrainer:
                 final_mask = combined_mask
                 learned_diag = {}
 
-            # ---- 7. 应用 mask 到 loss ----
+            # ---- 7. 计算 retained/filtered 在线真实统计 ----
+            # 用于验证 gate 是否真正在挑选"好"样本
+            from E2E_RL.refinement.reward_proxy import compute_refinement_reward
+
+            with torch.no_grad():
+                # 计算 corrected 的各分项
+                corrected_reward = compute_refinement_reward(
+                    refined_plan=corrected_plan,
+                    gt_plan=gt_plan,
+                    mask=plan_mask,
+                    **self.reward_config,
+                )
+                corrected_progress = corrected_reward['progress_reward']
+                # risk = collision + offroad + comfort
+                corrected_risk = (
+                    corrected_reward.get('collision_penalty', torch.zeros_like(advantage))
+                    + corrected_reward.get('offroad_penalty', torch.zeros_like(advantage))
+                    + corrected_reward.get('comfort_penalty', torch.zeros_like(advantage))
+                )
+
+            # retained vs filtered 统计
+            if final_mask.sum() > 0:
+                epoch_metrics['retained_advantage_mean'] += advantage[final_mask].mean().item()
+                epoch_metrics['retained_risk_mean'] += corrected_risk[final_mask].mean().item()
+                epoch_metrics['retained_progress_mean'] += corrected_progress[final_mask].mean().item()
+            else:
+                epoch_metrics['retained_advantage_mean'] += 0.0
+                epoch_metrics['retained_risk_mean'] += 0.0
+                epoch_metrics['retained_progress_mean'] += 0.0
+
+            if (~final_mask).sum() > 0:
+                epoch_metrics['filtered_advantage_mean'] += advantage[~final_mask].mean().item()
+                epoch_metrics['filtered_risk_mean'] += corrected_risk[~final_mask].mean().item()
+                epoch_metrics['filtered_progress_mean'] += corrected_progress[~final_mask].mean().item()
+            else:
+                epoch_metrics['filtered_advantage_mean'] += 0.0
+                epoch_metrics['filtered_risk_mean'] += 0.0
+                epoch_metrics['filtered_progress_mean'] += 0.0
+
+            # ---- 8. 应用 mask 到 loss ----
             # 被过滤的样本 loss 设为 0（不参与训练）
             masked_loss = per_sample_pg * final_mask.float()
             filtered_loss = masked_loss.sum() / (final_mask.sum() + 1e-8)
@@ -317,11 +364,16 @@ class CorrectionPolicyTrainer:
             f'pg={epoch_metrics["loss_pg"]:.4f} '
             f'entropy={epoch_metrics["loss_entropy"]:.4f} '
             f'adv={epoch_metrics["mean_advantage"]:.4f} '
-            f'retent={epoch_metrics["retention_ratio"]:.2%} '
+            f'retent={epoch_metrics["retention_ratio"]:.2%}'
             f'(safety={epoch_metrics["safety_pass_ratio"]:.2%}'
-            f', stapo={epoch_metrics["stapo_retention"]:.2%}'
+            + (f', stapo={epoch_metrics["stapo_retention"]:.2%}' if self.stapo_gate.cfg.enabled else '')
             + (f', learned={epoch_metrics["learned_retention"]:.2%}' if self.learned_gate else '')
-            + ')'
+            + ')\n'
+            f'  [Online Stats] '
+            f'retained_adv={epoch_metrics["retained_advantage_mean"]:.4f} '
+            f'filtered_adv={epoch_metrics["filtered_advantage_mean"]:.4f} '
+            f'retained_risk={epoch_metrics["retained_risk_mean"]:.4f} '
+            f'filtered_risk={epoch_metrics["filtered_risk_mean"]:.4f}'
         )
         return epoch_metrics
 

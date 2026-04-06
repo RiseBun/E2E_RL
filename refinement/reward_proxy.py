@@ -23,15 +23,18 @@ def progress_reward(
     refined_plan: torch.Tensor,
     gt_plan: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
+    fde_scale: float = 5.0,
 ) -> torch.Tensor:
     """计算沿 GT 方向的前进奖励。
 
     轨迹越接近 GT 终点，奖励越高。
+    使用 exp(-fde / fde_scale) 归一化，使大 FDE 时仍有合理 reward。
 
     Args:
         refined_plan: [B, T, 2] 精炼后的轨迹（绝对坐标）
         gt_plan: [B, T, 2] GT 轨迹（绝对坐标）
         mask: [B, T] 有效时间步掩码
+        fde_scale: FDE 归一化因子，默认 5.0m
 
     Returns:
         [B] 的进度奖励
@@ -49,9 +52,9 @@ def progress_reward(
         pred_end = refined_plan[:, -1]  # [B, 2]
         gt_end = gt_plan[:, -1]  # [B, 2]
 
-    # FDE 越小，奖励越高
+    # FDE 越小，奖励越高；使用 fde_scale 归一化
     fde = torch.norm(pred_end - gt_end, dim=-1)  # [B]
-    reward = torch.exp(-fde)  # (0, 1]
+    reward = torch.exp(-fde / fde_scale)  # (0, 1]
     return reward
 
 
@@ -154,11 +157,11 @@ def comfort_penalty(
     Returns:
         [B] 的舒适度惩罚
     """
-    # 速度: [B, T-1, 2]
+    # 速度: [B, T-1, 2], v = (p1-p0) / dt
     velocity = torch.diff(refined_plan, dim=1) / dt
-    # 加速度: [B, T-2, 2]
-    acceleration = torch.diff(velocity, dim=1) / dt
-    # jerk: [B, T-3, 2]
+    # 加速度: [B, T-2, 2], a = (v1-v0) = (p2-2p1+p0) / dt²
+    acceleration = torch.diff(velocity, dim=1)
+    # jerk: [B, T-3, 2], j = (a1-a0) / dt = (p3-3p2+3p1-p0) / dt³
     jerk = torch.diff(acceleration, dim=1) / dt
 
     # 加速度幅值惩罚
@@ -182,6 +185,7 @@ def compute_refinement_reward(
     w_collision: float = 0.5,
     w_offroad: float = 0.3,
     w_comfort: float = 0.1,
+    fde_scale: float = 5.0,
 ) -> Dict[str, torch.Tensor]:
     """计算综合奖励信号。
 
@@ -197,11 +201,12 @@ def compute_refinement_reward(
         w_collision: 碰撞惩罚权重
         w_offroad: 离道惩罚权重
         w_comfort: 舒适度惩罚权重
+        fde_scale: FDE 归一化因子，默认 5.0m
 
     Returns:
         字典包含 total_reward 和各分项
     """
-    r_progress = progress_reward(refined_plan, gt_plan, mask)
+    r_progress = progress_reward(refined_plan, gt_plan, mask, fde_scale)
     p_collision = collision_penalty(
         refined_plan, agent_positions, agent_future_trajs
     )

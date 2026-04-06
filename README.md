@@ -937,3 +937,60 @@ UpdateEvaluator (独立训练)
        ▼
 LearnedUpdateGate (可选集成)
 ```
+
+---
+
+## 实验结果 (2026-04-06)
+
+### 数据坐标系修复
+
+**问题**：GT (ego_fut_trajs) 和 VAD 预测 (ego_fut_preds) 在不同坐标系中。
+
+**发现**：
+- `ego_fut_trajs` (GT)：全局坐标，dump 时已 cumsum
+- `ego_fut_preds` (VAD)：ego-centric 位移增量，需 cumsum 转绝对坐标
+
+**修复**：
+```python
+# 修复前
+reference_plan = ego_fut_preds[0]  # 增量，错误
+gt_plan = ego_fut_trajs             # 全局坐标，错误
+
+# 修复后
+reference_plan = ego_fut_preds[0].cumsum(dim=0)  # ego-centric 绝对坐标
+gt_plan = gt_plan_global - gt_plan_global[0]    # ego-centric 绝对坐标
+```
+
+**结果**：GT correction 从 20m 降到 10-13m（合理范围）
+
+### A/B/C 实验对比
+
+| 实验 | 配置 | retained_adv | retention | filtered_adv |
+|------|------|-------------|-----------|--------------|
+| A | SafetyGuard only | -1.1054 | 46.51% | -1.6717 |
+| B | SafetyGuard + STAPOGate | -1.0830 | 46.79% | -1.6468 |
+| **C** | **SafetyGuard + LearnedUpdateGate** | **-1.0784** | 45.93% | -1.6586 |
+
+### 关键结论
+
+1. **LearnedUpdateGate 有效**：实验 C 的 retained_adv (-1.0784) 比实验 A (-1.1054) 提高了 **2.4%**
+
+2. **所有 advantage 仍为负**：VAD baseline 本身误差较大（3秒 FDE 约 10m），policy 修正能力有限
+
+3. **Policy 修正效果**：
+   - 部分样本 FDE 从 10m 降到 6m（有效修正）
+   - 部分样本 FDE 从 13m 变成 14m（修正方向错误）
+   - 整体泛化能力有待提升
+
+4. **训练配置**：
+   - BC epochs: 3
+   - RL epochs: 15
+   - action_scale: 2.0
+   - reward: progress + collision + offroad + comfort (w_comfort=0.01, fde_scale=5.0)
+
+### 下一步优化建议
+
+1. **增大 action_scale**：当前 2.0 限制修正量，可尝试 5.0
+2. **增加 BC epochs**：3 epochs 不足以充分学习 GT correction
+3. **调整 reward 权重**：增大 progress_reward 权重或减小 fde_scale
+4. **改善 policy 泛化**：增加训练数据或使用数据增强
