@@ -11,7 +11,11 @@ from typing import Any, Dict, Optional
 
 import torch
 
-from E2E_RL.planning_interface.interface import PlanningInterface
+# 相对导入，避免 E2E_RL 前缀问题
+try:
+    from ..interface import PlanningInterface
+except ImportError:
+    from E2E_RL.planning_interface.interface import PlanningInterface
 
 
 class BasePlanningAdapter(ABC):

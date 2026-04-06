@@ -58,7 +58,10 @@ class VADPlanningAdapter(BasePlanningAdapter):
         - 'max':       全局最大池化 → [B, D]
         - 'grid':      空间分块池化 → [B, grid_size^2 * D]，保留粗粒度空间
         - 'ego_local': ego 附近局部 token 均值池化 → [B, D]
+
+        也支持从 dump 数据中提取（interface_mean['token'] 等）。
         """
+        # 1. 从 BEV embedding 池化
         if 'bev_embed' in planner_outputs and planner_outputs['bev_embed'] is not None:
             bev = planner_outputs['bev_embed']
             if bev.dim() == 3:
@@ -80,7 +83,19 @@ class VADPlanningAdapter(BasePlanningAdapter):
             else:
                 raise ValueError(f'未知的池化方式: {self.scene_pool}')
 
-        # 回退：使用 ego 级别特征
+        # 2. 从 dump 数据中的 interface_* 字典提取
+        for key in ('interface_mean', 'interface_grid', 'interface_ego_local'):
+            if key in planner_outputs and planner_outputs[key] is not None:
+                interface_dict = planner_outputs[key]
+                if isinstance(interface_dict, dict):
+                    # dump 数据中可能叫 'scene_token' 或 'token'
+                    for token_key in ('scene_token', 'token'):
+                        if token_key in interface_dict:
+                            token = interface_dict[token_key]
+                            if isinstance(token, torch.Tensor):
+                                return token
+
+        # 3. 使用 ego 级别特征
         for key in ('ego_feats', 'ego_agent_feat', 'ego_map_feat'):
             if key in planner_outputs and planner_outputs[key] is not None:
                 feat = planner_outputs[key]
@@ -100,21 +115,30 @@ class VADPlanningAdapter(BasePlanningAdapter):
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """提取参考轨迹。
 
-        VAD 输出 ego_fut_preds 为 [B, M, T, 2] 的位移增量，
+        VAD 输出 ego_fut_preds 支持两种格式：
+        - 在线推理: [B, M, T, 2] 位移增量
+        - dump 数据: [M, T, 2] 位移增量（无 batch 维度）
+
         根据 ego_fut_cmd 选择对应模式并 cumsum 转为绝对坐标。
 
         Returns:
             (reference_plan, candidate_plans)
-            - reference_plan: [B, T, 2] ego-centric 绝对坐标
-            - candidate_plans: [B, M, T, 2] 位移增量
+            - reference_plan: [B, T, 2] ego-centric 绝对坐标（或 [T, 2] 如果无 batch）
+            - candidate_plans: [B, M, T, 2] 或 [M, T, 2] 位移增量
         """
         if 'ego_fut_preds' not in planner_outputs:
             raise KeyError('VAD 输出中缺少 ego_fut_preds')
 
         ego_fut_preds = planner_outputs['ego_fut_preds']
-        if ego_fut_preds.dim() == 3:
-            # [B, T, 2] → [B, 1, T, 2]
-            ego_fut_preds = ego_fut_preds.unsqueeze(1)
+
+        # 判断是否有 batch 维度
+        # [M, T, 2] -> dump 数据，无 batch
+        # [B, M, T, 2] -> 在线推理，有 batch
+        has_batch = ego_fut_preds.dim() == 4
+
+        if not has_batch:
+            # dump 数据格式 [M, T, 2] -> 添加 batch 维度 -> [1, M, T, 2]
+            ego_fut_preds = ego_fut_preds.unsqueeze(0)
 
         candidate_plans = ego_fut_preds  # [B, M, T, 2]
 

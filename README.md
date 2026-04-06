@@ -113,9 +113,8 @@ E2E_RL/
 │   ├── extractor.py           # BaseExtractor
 │   └── adapters/              # 规划器适配器 (VADAdapter 等)
 │
-├── data/                      # 数据加载
-│   ├── vad_dataset.py
-│   └── dataloader.py
+├── data/                      # 数据加载（通用接口）
+│   └── dataloader.py         # 支持所有规划器的统一 DataLoader
 │
 ├── refinement/                 # 奖励计算
 │   └── reward_proxy.py
@@ -300,6 +299,49 @@ Loss = -log π(GT_correction | state)
 7. total_loss = filtered_loss - entropy_coef * H(π)
 8. backward + step
 ```
+
+---
+
+## 数据加载
+
+### 通用 DataLoader
+
+使用统一的 DataLoader 加载所有规划器的 dump 数据：
+
+```python
+from E2E_RL.data.dataloader import build_planner_dataloader
+
+# VAD 数据
+loader = build_planner_dataloader(
+    'data/vad_dumps',
+    adapter_type='vad',
+    batch_size=8,
+)
+
+# DiffusionDrive 数据
+loader = build_planner_dataloader(
+    'data/diffusion_dumps',
+    adapter_type='diffusiondrive',
+    batch_size=8,
+)
+```
+
+### 设计原则
+
+| 组件 | 职责 |
+|------|------|
+| Dataset | 只加载原始数据，不做转换 |
+| Adapter | 负责坐标系转换和数据格式化 |
+| Collate_fn | 批量构建 PlanningInterface |
+
+**核心优势**：新模型只需要创建新的 Adapter，不需要修改 dataloader。
+
+### GT 坐标系处理
+
+| 模型 | GT 坐标系 | gt_in_ego_frame |
+|------|-----------|-----------------|
+| VAD | 全局坐标 → ego-centric | False |
+| DiffusionDrive | ego-centric | True |
 
 ---
 
@@ -727,9 +769,8 @@ E2E_RL/
 │   ├── extractor.py           # BaseExtractor
 │   └── adapters/              # 规划器适配器 (VADAdapter 等)
 │
-├── data/                      # 数据加载
-│   ├── vad_dataset.py
-│   └── dataloader.py
+├── data/                      # 数据加载（通用接口）
+│   └── dataloader.py         # 支持所有规划器的统一 DataLoader
 │
 ├── refinement/                 # 奖励计算
 │   └── reward_proxy.py
