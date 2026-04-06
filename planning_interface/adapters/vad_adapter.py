@@ -170,25 +170,30 @@ class VADPlanningAdapter(BasePlanningAdapter):
         使用候选模式间的方差作为不确定性代理:
         方差越大 → 不确定性越高 → 置信度越低。
         """
-        if 'ego_fut_preds' in planner_outputs and planner_outputs['ego_fut_preds'] is not None:
-            preds = planner_outputs['ego_fut_preds']
-            if preds.dim() == 4 and preds.shape[1] > 1:
-                # [B, M, T, 2] → 模式间方差 → [B, 1]
-                mode_variance = preds.var(dim=1).mean(dim=(-2, -1))  # [B]
-                # 方差越大，置信度越低；用负指数映射到 (0, 1]
-                confidence = torch.exp(-mode_variance).unsqueeze(-1)  # [B, 1]
-                return confidence
+        if 'ego_fut_preds' not in planner_outputs or planner_outputs['ego_fut_preds'] is None:
+            return None
 
-        # 回退：均匀置信度
-        ego_fut_preds = planner_outputs.get('ego_fut_preds')
-        if ego_fut_preds is not None:
-            batch_size = ego_fut_preds.shape[0]
-            return torch.ones(
-                (batch_size, 1),
-                device=ego_fut_preds.device,
-                dtype=ego_fut_preds.dtype,
-            )
-        return None
+        preds = planner_outputs['ego_fut_preds']
+
+        # dump 数据格式 [M, T, 2] 没有 batch 维度，需要先添加
+        has_batch = preds.dim() == 4
+        if not has_batch:
+            preds = preds.unsqueeze(0)  # [M, T, 2] -> [1, M, T, 2]
+
+        if preds.shape[1] > 1:
+            # [B, M, T, 2] → 模式间方差 → [B]
+            mode_variance = preds.var(dim=1).mean(dim=(-2, -1))  # [B]
+            # 方差越大，置信度越低；用负指数映射到 (0, 1]
+            confidence = torch.exp(-mode_variance).unsqueeze(-1)  # [B, 1]
+            return confidence
+
+        # 单模式：均匀置信度
+        batch_size = preds.shape[0]
+        return torch.ones(
+            (batch_size, 1),
+            device=preds.device,
+            dtype=preds.dtype,
+        )
 
     # ------------------------------------------------------------------
     # safety_features

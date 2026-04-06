@@ -171,7 +171,12 @@ class CorrectionPolicy(nn.Module):
         Returns:
             [B, T, 2] 修正量
         """
-        output = self.actor(interface, deterministic=True)
+        output = self.actor(
+            scene_token=interface.scene_token,
+            reference_plan=interface.reference_plan,
+            plan_confidence=interface.plan_confidence,
+            deterministic=True,
+        )
         return output['action']
 
     def get_corrected_plan(self, interface: PlanningInterface) -> torch.Tensor:
@@ -197,7 +202,12 @@ class CorrectionPolicy(nn.Module):
                 - mean_std: 平均标准差
                 - mean_entropy: 平均熵
         """
-        output = self.actor(interface, deterministic=True)
+        output = self.actor(
+            scene_token=interface.scene_token,
+            reference_plan=interface.reference_plan,
+            plan_confidence=interface.plan_confidence,
+            deterministic=True,
+        )
         mean_abs = output['action'].abs().mean().item()
         std_mean = output['std'].mean().item()
 
