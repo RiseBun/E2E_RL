@@ -73,7 +73,7 @@ python scripts/dump_vad_inference.py \
     --max_samples 5000
 ```
 
-### Step 3: 验证数据加载
+### Step 3: 验证数据加载（数据增强后也建议验证，修改路径即可）
 
 ```bash
 cd ~/E2E_RL
@@ -160,10 +160,10 @@ VAD Dump 数据扩充
 > 实测：正 gain 样本仅占 26%，73% 的修正是无效的，必须筛选。
 
 ```bash
-cd /mnt/cpfs/prediction/lipeinan/RL/E2E_RL
+cd ~/E2E_RL
 
 python scripts/train_evaluator_v2.py \
-    --data_dir data/原始或数据增强
+    --data_dir data/vad_dumps_full \
     --output_dir experiments/update_evaluator_v4_5k_samples \
     --num_epochs 50
 ```
@@ -173,14 +173,35 @@ python scripts/train_evaluator_v2.py \
 三种实验配置可选：
 
 ```bash
-# 实验 A: SafetyGuard only（baseline）
-python scripts/expA_relaxed.py --num_epochs 15 --bc_epochs 3
+cd ~/E2E_RL
 
+# ==========================================
+# 实验 A: SafetyGuard only (Baseline)
+# ==========================================
+python scripts/expA_relaxed.py \
+    --data_dir data/vad_dumps_full \
+    --output_dir experiments/ab_comparison_v2/expA_safety_guard_only \
+    --num_epochs 15 \
+    --bc_epochs 3
+
+# ==========================================
 # 实验 B: SafetyGuard + STAPOGate
-python scripts/expB_relaxed.py --num_epochs 15 --bc_epochs 3
+# ==========================================
+python scripts/expB_relaxed.py \
+    --data_dir data/vad_dumps_full \
+    --output_dir experiments/ab_comparison_v2/expB_stapo_gate \
+    --num_epochs 15 \
+    --bc_epochs 3
 
-# 实验 C: SafetyGuard + LearnedUpdateGate（✅ 推荐）
-python scripts/expC_relaxed.py --num_epochs 15 --bc_epochs 3
+# ==========================================
+# 实验 C: SafetyGuard + LearnedUpdateGate (✅ 推荐)
+# ==========================================
+python scripts/expC_relaxed.py \
+    --data_dir data/vad_dumps_full \
+    --output_dir experiments/ab_comparison_v2/expC_learned_gate \
+    --evaluator_ckpt experiments/update_evaluator_v4_5k_samples/evaluator_epoch_30.pth \
+    --num_epochs 15 \
+    --bc_epochs 3
 ```
 
 ### Step 7: 推理
@@ -376,7 +397,7 @@ print(f'GT correction: {correction.mean():.2f}m')  # 期望 0-15m
 ### 基本用法
 
 ```bash
-cd /mnt/cpfs/prediction/lipeinan/RL/E2E_RL
+cd ~/E2E_RL
 
 # 完整三层防御推理
 python scripts/inference_with_correction.py \
