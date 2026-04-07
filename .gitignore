@@ -59,9 +59,8 @@ Thumbs.db
 *.npy
 *.npz
 
-# External projects (nested git repos)
-projects/*/
-!projects/README.md
+# External projects (nested git repos - managed separately)
+projects/
 !projects/.gitkeep
 
 # Dump data directories
