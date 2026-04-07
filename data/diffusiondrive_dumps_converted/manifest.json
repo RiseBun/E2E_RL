@@ -1,0 +1,63 @@
+{
+  "format": "E2E_RL_dump_v1",
+  "planner": "DiffusionDrive",
+  "pool_mode": "grid",
+  "samples": [
+    {
+      "idx": 0,
+      "file": "000000.pt"
+    },
+    {
+      "idx": 1,
+      "file": "000001.pt"
+    },
+    {
+      "idx": 2,
+      "file": "000002.pt"
+    },
+    {
+      "idx": 3,
+      "file": "000003.pt"
+    },
+    {
+      "idx": 4,
+      "file": "000004.pt"
+    },
+    {
+      "idx": 5,
+      "file": "000005.pt"
+    },
+    {
+      "idx": 6,
+      "file": "000006.pt"
+    },
+    {
+      "idx": 7,
+      "file": "000007.pt"
+    },
+    {
+      "idx": 8,
+      "file": "000008.pt"
+    },
+    {
+      "idx": 9,
+      "file": "000009.pt"
+    },
+    {
+      "idx": 10,
+      "file": "000010.pt"
+    },
+    {
+      "idx": 11,
+      "file": "000011.pt"
+    },
+    {
+      "idx": 12,
+      "file": "000012.pt"
+    },
+    {
+      "idx": 13,
+      "file": "000013.pt"
+    }
+  ]
+}

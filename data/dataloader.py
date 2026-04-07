@@ -143,8 +143,15 @@ class PlannerDumpDataset(Dataset):
         # 提取 GT 轨迹
         gt_plan = self._extract_gt_plan(data)
 
+        # 如果数据中包含 planner_outputs 字段（转换后的格式），优先使用
+        if 'planner_outputs' in data:
+            planner_outputs = data['planner_outputs']
+        else:
+            # 否则使用整个 data 字典（原始格式）
+            planner_outputs = data
+
         return {
-            'planner_outputs': data,
+            'planner_outputs': planner_outputs,
             'gt_plan': gt_plan,
             'metadata': sample_info,
         }

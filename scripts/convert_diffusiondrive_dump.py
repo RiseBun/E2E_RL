@@ -86,7 +86,6 @@ def main() -> None:
     parser.add_argument('--output_dir', type=str, required=True, help='输出 dump 目录（含 manifest.json + 000000.pt...）')
     parser.add_argument('--pool_mode', type=str, default='grid', choices=['mean', 'grid', 'ego_local'])
     parser.add_argument('--grid_size', type=int, default=4)
-    parser.add_argument('--ego_local_k', type=int, default=16)
     parser.add_argument('--max_samples', type=int, default=None)
     args = parser.parse_args()
 
@@ -101,7 +100,6 @@ def main() -> None:
     adapter = DiffusionDrivePlanningAdapter(
         scene_pool=args.pool_mode,
         grid_size=args.grid_size,
-        ego_local_k=args.ego_local_k,
     )
 
     manifest: Dict[str, Any] = {
@@ -123,6 +121,8 @@ def main() -> None:
             'source_path': str(p),
             'ego_fut_trajs': gt_plan.detach().cpu(),
             f'interface_{args.pool_mode}': _interface_to_cpu_dict(interface),
+            'planner_outputs': {k: v.detach().cpu() if isinstance(v, torch.Tensor) else v 
+                               for k, v in planner_outputs.items()},
         }
 
         torch.save(save_dict, output_dir / f'{i:06d}.pt')

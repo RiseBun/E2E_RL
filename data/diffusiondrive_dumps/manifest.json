@@ -1,0 +1,91 @@
+{
+  "total_samples": 14,
+  "skipped_samples": 86,
+  "scene_filter": "SceneFilter(num_history_frames=4, num_future_frames=10, frame_interval=14, has_route=True, max_scenes=None, log_names=None, tokens=None)",
+  "samples": [
+    {
+      "idx": 0,
+      "file": "000000.pt",
+      "token": "f8813b0d87e85d64",
+      "scene_token": "01fcea70e3e4517f"
+    },
+    {
+      "idx": 1,
+      "file": "000001.pt",
+      "token": "f2d4eec5356e53ab",
+      "scene_token": "0043c8d028f751ea"
+    },
+    {
+      "idx": 2,
+      "file": "000002.pt",
+      "token": "9002015f14765627",
+      "scene_token": "6032fb6d6f78581f"
+    },
+    {
+      "idx": 3,
+      "file": "000003.pt",
+      "token": "81f6761f180351c3",
+      "scene_token": "8892dde634035bfb"
+    },
+    {
+      "idx": 4,
+      "file": "000004.pt",
+      "token": "5fa349caf4dc5986",
+      "scene_token": "bb02b80724075207"
+    },
+    {
+      "idx": 5,
+      "file": "000005.pt",
+      "token": "fffa4caf82255085",
+      "scene_token": "2b069646e79c588c"
+    },
+    {
+      "idx": 6,
+      "file": "000006.pt",
+      "token": "51f990470dfa550d",
+      "scene_token": "2b069646e79c588c"
+    },
+    {
+      "idx": 7,
+      "file": "000007.pt",
+      "token": "6738b20eeb175494",
+      "scene_token": "c98b04e12ad55b95"
+    },
+    {
+      "idx": 8,
+      "file": "000008.pt",
+      "token": "366130aee1a55037",
+      "scene_token": "c98b04e12ad55b95"
+    },
+    {
+      "idx": 9,
+      "file": "000009.pt",
+      "token": "038fc989141e5160",
+      "scene_token": "578728f9bc3a5834"
+    },
+    {
+      "idx": 10,
+      "file": "000010.pt",
+      "token": "b02f88ee9d7756e5",
+      "scene_token": "e3619336eccc59f9"
+    },
+    {
+      "idx": 11,
+      "file": "000011.pt",
+      "token": "d70d634bc34b5cf3",
+      "scene_token": "4ad2cef0df7456ac"
+    },
+    {
+      "idx": 12,
+      "file": "000012.pt",
+      "token": "c27d0fdda1c751c5",
+      "scene_token": "26eecec4acec56a3"
+    },
+    {
+      "idx": 13,
+      "file": "000013.pt",
+      "token": "f76bbff36bb85e89",
+      "scene_token": "95d2681716625a7e"
+    }
+  ]
+}

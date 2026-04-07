@@ -7,7 +7,8 @@
 ## 目录
 
 - [Pipeline](#pipeline)
-- [运行示例 (VAD)](#运行示例-vad)
+- [运行示例 (DiffusionDrive)](#基于-diffusiondrive-的运行示例)
+- [运行示例 (VAD)](#基于vad的运行示例其他模型的过程一致)
 - [项目结构](#项目结构)
 - [集成新模型](#集成新模型)
 - [坐标系约定](#坐标系约定)
@@ -37,6 +38,164 @@
 │ 阶段 3: RL 训练和推理（模型无关）                                 │
 │   └─ 所有模块通过 PlanningInterface 解耦                          │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 基于 DiffusionDrive 的运行示例
+
+> **前置条件**: 已完成 [DiffusionDrive 项目配置](projects/DiffusionDrive/README.md) 和环境变量设置
+
+### Step 1: 配置 DiffusionDrive 环境
+
+```bash
+cd ~/E2E_RL/projects/DiffusionDrive
+
+# 设置环境变量
+source setup_env.sh
+```
+
+### Step 2: 运行 DiffusionDrive 推理并 Dump 数据
+
+```bash
+cd ~/E2E_RL
+
+python scripts/dump_diffusiondrive_inference.py \
+    --diffusiondrive_root ~/E2E_RL/projects/DiffusionDrive \
+    --agent_config ~/E2E_RL/projects/DiffusionDrive/navsim/planning/script/config/common/agent/diffusiondrive_agent.yaml \
+    --checkpoint ~/E2E_RL/projects/DiffusionDrive/download/ckpt/diffusiondrive_navsim_88p1_PDMS \
+    --data_path ~/E2E_RL/projects/DiffusionDrive/navsim_workspace/dataset/navsim_logs/trainval \
+    --sensor_path ~/E2E_RL/projects/DiffusionDrive/navsim_workspace/dataset/sensor_blobs/trainval \
+    --output_dir data/diffusiondrive_dumps \
+    --max_samples 100 \
+    --device cuda
+```
+
+**参数说明**:
+- `--diffusiondrive_root`: DiffusionDrive 项目根目录
+- `--agent_config`: Agent 配置文件路径
+- `--checkpoint`: 预训练模型检查点路径
+- `--data_path`: NAVSIM 日志数据路径
+- `--sensor_path`: 传感器数据路径
+- `--output_dir`: 输出目录（保存 .pt 文件）
+- `--max_samples`: 最大推理样本数（默认全部）
+- `--device`: 推理设备（cuda 或 cpu）
+
+**预期输出**:
+```
+17:54:37 [INFO] ============================================================
+17:54:37 [INFO] DiffusionDrive (NAVSIM) 数据导出工具
+17:54:37 [INFO] ============================================================
+17:54:37 [INFO] Step 1: 加载 DiffusionDrive 模型...
+17:54:43 [INFO] ✓ 模型加载完成
+17:54:43 [INFO] Step 2: 构建 NAVSIM SceneLoader...
+Loading logs: 100%|██████████| 1310/1310 [01:32<00:00, 14.09it/s]
+17:56:16 [INFO] ✓ SceneLoader 构建完成，共 47950 个场景
+17:56:16 [INFO] Step 3: 运行推理并导出...
+17:56:24 [INFO] [10/100] Saved 000009.pt (0.63s)
+17:56:26 [INFO] ✓ 推理完成！共保存 14 个样本，跳过 86 个
+17:56:26 [INFO] 输出目录: data/diffusiondrive_dumps
+```
+
+### Step 3: 转换为 RL 训练格式
+
+> **重要**: DiffusionDrive dump 的原始数据需要转换为 E2E_RL 标准格式
+
+```bash
+cd ~/E2E_RL
+
+python scripts/convert_diffusiondrive_dump.py \
+    --input_dir data/diffusiondrive_dumps \
+    --output_dir data/diffusiondrive_dumps_converted \
+    --pool_mode grid \
+    --grid_size 4 \
+    --max_samples 100
+```
+
+**参数说明**:
+- `--input_dir`: 原始 DiffusionDrive dump 目录
+- `--output_dir`: 转换后的输出目录
+- `--pool_mode`: BEV 语义图池化方式（`mean` / `grid` / `ego_local`）
+- `--grid_size`: grid 池化的分块数（默认 4）
+- `--max_samples`: 最大转换样本数
+
+**转换内容**:
+- 提取 `planner_outputs`（包含 `bev_semantic_map`、`trajectory` 等）
+- 提取 GT 轨迹 (`ego_fut_trajs`)
+- 使用 `DiffusionDrivePlanningAdapter` 转换为 `PlanningInterface` 格式
+- 生成 `manifest.json` 索引文件
+
+**预期输出**:
+```
+2026-04-07 18:54:06,929 [INFO] 转换完成: 14 samples -> data/diffusiondrive_dumps_converted
+```
+
+### Step 4: 验证数据加载
+
+```bash
+cd ~/E2E_RL
+
+python -c "
+from data.dataloader import build_planner_dataloader
+loader = build_planner_dataloader('data/diffusiondrive_dumps_converted', adapter_type='diffusiondrive', batch_size=8)
+for batch in loader:
+    gt = batch['gt_plan']
+    ref = batch['interface'].reference_plan
+    print(f'✅ GT终点距原点: {gt[:, -1, :].norm(dim=-1)[:3]}')
+    print(f'✅ Ref终点距原点: {ref[:, -1, :].norm(dim=-1)[:3]}')
+    print(f'✅ scene_token shape: {batch[\"interface\"].scene_token.shape}')
+    break
+"
+```
+
+**期望输出**（ego-centric 坐标系）:
+```
+✅ GT终点距原点: tensor([15.9156, 17.9112, 54.6458])
+✅ Ref终点距原点: tensor([15.8595, 17.7241, 54.1167])
+✅ scene_token shape: torch.Size([8, 7])
+```
+
+> **💡 提示**: 
+> - GT 和 Ref 轨迹终点距离应该接近，说明 DiffusionDrive 推理质量良好
+> - 如果没有警告信息，说明数据格式正确，可以用于 RL 训练
+
+### Step 5: 数据增强（可选）
+
+```bash
+cd ~/E2E_RL
+
+python scripts/augment_vad_data.py \
+    --input_dir data/diffusiondrive_dumps_converted \
+    --output_dir data/diffusiondrive_dumps_full \
+    --samples_per_original 50 \
+    --noise_scale 0.1 \
+    --max_samples 5000
+```
+
+### Step 6-7: 训练和推理
+
+后续步骤与 VAD 示例完全相同，只需修改数据路径：
+
+```bash
+# 训练 UpdateEvaluator
+python scripts/train_evaluator_v2.py \
+    --data_dir data/diffusiondrive_dumps_full \
+    --output_dir experiments/diffusiondrive_evaluator \
+    --num_epochs 50
+
+# 训练 CorrectionPolicy（实验 C）
+python scripts/expC_relaxed.py \
+    --data_dir data/diffusiondrive_dumps_full \
+    --output_dir experiments/diffusiondrive_policy \
+    --evaluator_ckpt experiments/diffusiondrive_evaluator/evaluator_epoch_30.pth \
+    --num_epochs 15 \
+    --bc_epochs 3
+
+# 推理
+python scripts/inference_with_correction.py \
+    --checkpoint experiments/diffusiondrive_policy/policy_final.pth \
+    --evaluator experiments/diffusiondrive_evaluator/update_evaluator_final.pth \
+    --data_dir data/diffusiondrive_dumps_converted
 ```
 
 ---
