@@ -174,7 +174,7 @@ python scripts/augment_vad_data.py \
 
 ### Step 6-7: 训练和推理
 
-后续步骤与 VAD 示例完全相同，只需修改数据路径：
+后续步骤只需修改数据路径：
 
 ```bash
 # 训练 UpdateEvaluator

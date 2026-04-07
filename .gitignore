@@ -49,6 +49,8 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+*.log
+*.tmp
 
 # Project specific - Data (do not commit)
 *.pt
@@ -56,6 +58,21 @@ Thumbs.db
 *.pickle
 *.npy
 *.npz
+
+# Dump data directories
+data/*/
+!data/.gitkeep
+data/*/*/
+
+# DiffusionDrive specific
+diffusiondrive_dumps/
+diffusiondrive_dumps_converted/
+diffusiondrive_dumps_full/
+
+# NAVSIM cache and metric cache
+metric_cache/
+navsim_workspace/
+.cache/
 
 # Checkpoints and logs
 experiments/*/
@@ -66,6 +83,11 @@ wandb/
 tensorboard/
 logs/
 
+# Output directories
+outputs/
+results/
+predictions/
+
 # Config overrides (local settings)
 configs/*.local.yaml
 configs/local/
@@ -73,3 +95,8 @@ configs/local/
 # Documentation build
 docs/_build/
 site/
+
+# Model weights and checkpoints
+download/
+ckpt/
+checkpoints/
