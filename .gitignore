@@ -59,20 +59,15 @@ Thumbs.db
 *.npy
 *.npz
 
+# External projects (nested git repos)
+projects/*/
+!projects/README.md
+!projects/.gitkeep
+
 # Dump data directories
 data/*/
 !data/.gitkeep
 data/*/*/
-
-# DiffusionDrive specific
-diffusiondrive_dumps/
-diffusiondrive_dumps_converted/
-diffusiondrive_dumps_full/
-
-# NAVSIM cache and metric cache
-metric_cache/
-navsim_workspace/
-.cache/
 
 # Checkpoints and logs
 experiments/*/
