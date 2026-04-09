@@ -31,11 +31,11 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  任何 E2E 模型 (VAD, SparseDrive, DiffusionDrive, ...)      │
+│  任何 E2E 模型 (VAD, SparseDrive, DiffusionDrive, ...)       │
 │         ↓ 导出 .pt 文件                                      │
-│  PlanningInterface (统一接口层)                               │
+│  PlanningInterface (统一接口层)                              │
 │         ↓ 完全解耦                                           │
-│  E2E_RL 训练和推理 (模型无关)                                 │
+│  E2E_RL 训练和推理 (模型无关)                                  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -150,11 +150,11 @@ conda activate <model_env>  # 如 vad, sparsedrive, diffusiondrive
 # 2. 设置 PYTHONPATH（如果需要）
 export PYTHONPATH=projects/<ModelName>:$PYTHONPATH
 
-# 3. 运行导出脚本
+# 3. 运行导出脚本，注意查看多模型集成完成报告查看用法
 cd ~/E2E_RL
 python scripts/dump_<model>_inference.py \
     --output_dir data/<model>_dumps \
-    --max_samples 10  # 先用少量样本测试
+    --max_samples 10  # 收集样本数量
 
 # 4. 导出完成后，切换回 E2E_RL 环境
 conda deactivate
