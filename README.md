@@ -202,6 +202,32 @@ python scripts/inference_with_correction.py \
 
 ## 基于vad的运行示例，其他模型的过程一致 
 
+### Step 0: 配置 Conda 环境
+
+VAD 项目依赖 mmcv、mmdet3d 等库，需要正确配置环境：
+
+```bash
+# 激活您的 conda 环境（根据实际环境名修改）
+conda create -n vad python=3.10
+conda activate vad
+
+# 安装 mmcv（根据您的 PyTorch 和 CUDA 版本选择）
+# PyTorch 1.13 + CUDA 11.7 示例：
+pip install mmcv==2.0.0 -f https://download.openmmlab.com/mmcv/dist/cu117/torch1.13/index.html
+
+# 或者 PyTorch 2.0 + CUDA 11.8 示例：
+# pip install mmcv==2.0.0 -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.0/index.html
+
+# 安装其他必需依赖
+cd ~/E2E_RL/projects/VAD
+pip install -r requirements.txt
+
+# 回到项目根目录
+cd ~/E2E_RL
+```
+
+> **注意**: mmcv 版本必须与您的 PyTorch 和 CUDA 版本匹配。如果已安装 mmcv，可跳过此步骤。
+
 ### Step 1: 放置 VAD 项目
 
 ```bash
@@ -229,6 +255,7 @@ python scripts/dump_vad_inference.py \
     --config ~/E2E_RL/projects/VAD/projects/configs/VAD/VAD_base_e2e.py \
     --checkpoint /path/to/vad_epoch_xxx.pth \
     --output_dir data/vad_dumps \
+    --data_root /path/to/nuscenes/data/ \
     --max_samples 5000
 ```
 

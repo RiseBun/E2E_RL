@@ -7,13 +7,30 @@
 1. 对 reference_plan 添加小扰动（模拟 VAD 输出的自然变化）
 2. 对 scene_token 添加小扰动（模拟特征提取的随机性）
 3. 保留 GT 和其他元信息不变
+
+输出结构:
+    output_dir/
+    ├── manifest.json          # 样本索引
+    ├── 000000.pt              # 第 0 帧
+    ├── 000001.pt              # 第 1 帧
+    └── ...
 """
 
 import torch
+import json
 import os
 from pathlib import Path
 from tqdm import tqdm
 import argparse
+import time
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S',
+)
+logger = logging.getLogger(__name__)
 
 def augment_sample(sample: dict, noise_scale: float = 0.1) -> dict:
     """对单个样本添加噪声扩充"""
@@ -46,6 +63,7 @@ def augment_dataset(
     output_dir: str,
     samples_per_original: int = 50,
     noise_scale: float = 0.1,
+    max_samples: int = 5000,
 ):
     """扩充数据集
 
@@ -54,6 +72,7 @@ def augment_dataset(
         output_dir: 输出目录
         samples_per_original: 每个原始样本扩充多少个
         noise_scale: 噪声尺度
+        max_samples: 最大样本数
     """
     input_path = Path(input_dir)
     output_path = Path(output_dir)
@@ -61,10 +80,12 @@ def augment_dataset(
 
     # 获取所有原始 .pt 文件
     pt_files = sorted(list(input_path.glob("*.pt")))
-    print(f"找到 {len(pt_files)} 个原始样本")
+    logger.info(f"找到 {len(pt_files)} 个原始样本")
 
     total_generated = 0
     original_count = 0
+    manifest = []
+    t_start = time.time()
 
     for pt_file in tqdm(pt_files, desc="扩充数据"):
         # 加载原始样本
@@ -75,6 +96,13 @@ def augment_dataset(
             # 只保存前几个原始样本作为参考
             output_file = output_path / f"{total_generated:06d}.pt"
             torch.save(sample, output_file)
+            
+            # manifest 条目
+            entry = {'idx': total_generated, 'file': f"{total_generated:06d}.pt", 'type': 'original'}
+            if 'scene_token' in sample:
+                entry['scene_token'] = sample.get('scene_token', '')
+            manifest.append(entry)
+            
             total_generated += 1
             original_count += 1
 
@@ -88,16 +116,38 @@ def augment_dataset(
 
             output_file = output_path / f"{total_generated:06d}.pt"
             torch.save(aug_sample, output_file)
+            
+            # manifest 条目
+            entry = {'idx': total_generated, 'file': f"{total_generated:06d}.pt", 'type': 'augmented'}
+            if 'scene_token' in aug_sample:
+                entry['scene_token'] = aug_sample.get('scene_token', '')
+            manifest.append(entry)
+            
             total_generated += 1
 
-            if total_generated >= 5000:
+            if total_generated >= max_samples:
                 break
 
-        if total_generated >= 5000:
+        if total_generated >= max_samples:
             break
 
-    print(f"\n扩充完成！共生成 {total_generated} 个样本")
-    print(f"输出目录: {output_path}")
+    # 保存 manifest
+    manifest_path = output_path / 'manifest.json'
+    with open(manifest_path, 'w') as f:
+        json.dump({
+            'total_samples': len(manifest),
+            'original_samples': len(pt_files),
+            'augmented': True,
+            'samples_per_original': samples_per_original,
+            'noise_scale': noise_scale,
+            'input_dir': str(input_path),
+            'samples': manifest,
+        }, f, indent=2)
+
+    elapsed_total = time.time() - t_start
+    logger.info(f"扩充完成！共生成 {total_generated} 个样本，耗时 {elapsed_total:.1f}s")
+    logger.info(f"输出目录: {output_path}")
+    logger.info(f"Manifest: {manifest_path}")
 
     return total_generated
 
@@ -134,6 +184,7 @@ def main():
         output_dir=args.output_dir,
         samples_per_original=args.samples_per_original,
         noise_scale=args.noise_scale,
+        max_samples=args.max_samples,
     )
 
     print(f"\n最终样本数: {total}")

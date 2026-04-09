@@ -17,6 +17,7 @@
         --config projects/configs/VAD/VAD_base_e2e.py \
         --checkpoint /path/to/epoch_X.pth \
         --output_dir E2E_RL/data/vad_dumps \
+        --data_root /path/to/nuscenes/data/ \
         --max_samples 100  # 调试用，省略则跑全集
 
 输出结构:
@@ -278,7 +279,7 @@ def save_sample(
 # ======================================================================
 # 主流程
 # ======================================================================
-def build_model_and_dataloader(cfg_path: str, ckpt_path: str):
+def build_model_and_dataloader(cfg_path: str, ckpt_path: str, data_root: Optional[str] = None):
     """复用 tools/test.py 的模型和数据加载逻辑。"""
     import importlib
 
@@ -293,6 +294,23 @@ def build_model_and_dataloader(cfg_path: str, ckpt_path: str):
     from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 
     cfg = Config.fromfile(cfg_path)
+    
+    # 允许命令行覆盖 data_root
+    if data_root is not None:
+        logger.info(f'使用指定的数据目录: {data_root}')
+        cfg.data_root = data_root
+        # 更新 dataset 配置中的 data_root
+        if hasattr(cfg, 'data'):
+            for split in ['train', 'val', 'test']:
+                if hasattr(cfg.data, split) and isinstance(cfg.data[split], dict):
+                    cfg.data[split]['data_root'] = data_root
+            # 更新 ann_file 和 map_ann_file 路径
+            for split in ['val', 'test']:
+                if hasattr(cfg.data, split) and isinstance(cfg.data[split], dict):
+                    if 'ann_file' in cfg.data[split]:
+                        cfg.data[split]['ann_file'] = data_root + cfg.data[split]['ann_file'].split('/')[-1]
+                    if 'map_ann_file' in cfg.data[split]:
+                        cfg.data[split]['map_ann_file'] = data_root + cfg.data[split]['map_ann_file'].split('/')[-1]
 
     # 加载插件
     if hasattr(cfg, 'plugin') and cfg.plugin:
@@ -346,6 +364,7 @@ def run_dump(
     ckpt_path: str,
     output_dir: str,
     max_samples: Optional[int] = None,
+    data_root: Optional[str] = None,
 ):
     """执行推理 dump。"""
     output_path = Path(output_dir)
@@ -353,10 +372,12 @@ def run_dump(
 
     logger.info(f'配置文件: {cfg_path}')
     logger.info(f'检查点:   {ckpt_path}')
+    if data_root is not None:
+        logger.info(f'数据目录: {data_root}')
     logger.info(f'输出目录: {output_path}')
 
     # 构建模型和数据加载器
-    model, data_loader, dataset = build_model_and_dataloader(cfg_path, ckpt_path)
+    model, data_loader, dataset = build_model_and_dataloader(cfg_path, ckpt_path, data_root)
     logger.info(f'数据集大小: {len(dataset)}')
 
     total = min(len(dataset), max_samples) if max_samples else len(dataset)
@@ -470,6 +491,8 @@ def main():
                         help='输出目录')
     parser.add_argument('--max_samples', type=int, default=None,
                         help='最大导出样本数（调试用）')
+    parser.add_argument('--data_root', type=str, default=None,
+                        help='nuScenes 数据根目录（覆盖配置文件中的 data_root）')
     args = parser.parse_args()
 
     run_dump(
@@ -477,6 +500,7 @@ def main():
         ckpt_path=args.checkpoint,
         output_dir=args.output_dir,
         max_samples=args.max_samples,
+        data_root=args.data_root,
     )
 
 
