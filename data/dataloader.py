@@ -42,14 +42,32 @@ logger = logging.getLogger(__name__)
 def _get_adapter_class(adapter_type: str):
     """根据 adapter_type 获取对应的 Adapter 类。"""
     from E2E_RL.planning_interface.adapters.vad_adapter import VADPlanningAdapter
+    from E2E_RL.planning_interface.adapters.vadv2_adapter import VADv2PlanningAdapter
     from E2E_RL.planning_interface.adapters.diffusiondrive_adapter import (
         DiffusionDrivePlanningAdapter,
+    )
+    from E2E_RL.planning_interface.adapters.diffusiondrivev2_adapter import (
+        DiffusionDriveV2PlanningAdapter,
+    )
+    from E2E_RL.planning_interface.adapters.sparsedrive_adapter import (
+        SparseDrivePlanningAdapter,
+    )
+    from E2E_RL.planning_interface.adapters.sparsedrivev2_adapter import (
+        SparseDriveV2PlanningAdapter,
+    )
+    from E2E_RL.planning_interface.adapters.uniad_adapter import (
+        UniADPlanningAdapter,
     )
 
     adapter_map = {
         'vad': VADPlanningAdapter,
+        'vadv2': VADv2PlanningAdapter,
         'diffusiondrive': DiffusionDrivePlanningAdapter,
+        'diffusiondrivev2': DiffusionDriveV2PlanningAdapter,
         'diffusion_drive': DiffusionDrivePlanningAdapter,
+        'sparsedrive': SparseDrivePlanningAdapter,
+        'sparsedrivev2': SparseDriveV2PlanningAdapter,
+        'uniad': UniADPlanningAdapter,
     }
 
     if adapter_type not in adapter_map:

@@ -5,8 +5,20 @@
 - SafetyGuard: 保留（放宽约束）
 - STAPOGate: 禁用（让 LearnedUpdateGate 单独工作）
 - LearnedUpdateGate: 主判断
+
+用法:
+    # 使用默认配置
+    python scripts/expC_relaxed.py
+    
+    # 使用命令行参数覆盖
+    python scripts/expC_relaxed.py \
+        --data_dir data/vad_dumps_full \
+        --evaluator_ckpt experiments/update_evaluator/evaluator_final.pth \
+        --output_dir experiments/expC \
+        --rl_epochs 50
 """
 
+import argparse
 import torch
 import sys
 import json
@@ -22,9 +34,10 @@ from E2E_RL.update_selector.safety_guard import SafetyGuard, SafetyGuardConfig
 from E2E_RL.update_selector.stapo_gate import STAPOGate, STAPOGateConfig
 from E2E_RL.update_selector.update_evaluator import UpdateEvaluator, UpdateEvaluatorConfig, LearnedUpdateGate
 
-CONFIG = {
+# 默认配置
+DEFAULT_CONFIG = {
     'data': {
-        'data_dir': '/mnt/cpfs/prediction/lipeinan/RL/E2E_RL/data/vad_dumps_full',
+        'data_dir': 'data/vad_dumps_full',
         'batch_size': 16,
     },
     'model': {
@@ -44,12 +57,102 @@ CONFIG = {
         'w_progress': 1.0,
         'w_collision': 0.5,
         'w_offroad': 0.3,
-        'w_comfort': 0.01,  # 减小 comfort 权重，避免过度惩罚探索
-        'fde_scale': 5.0,   # 调整 FDE 归一化因子
+        'w_comfort': 0.01,
+        'fde_scale': 5.0,
     },
-    'evaluator_ckpt': '/mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/update_evaluator_v4_5k_samples/update_evaluator_final.pth',
-    'output_dir': '/mnt/cpfs/prediction/lipeinan/RL/E2E_RL/experiments/ab_comparison_v2/expC_learned_gate',
+    'evaluator_ckpt': 'experiments/update_evaluator/evaluator_final.pth',
+    'output_dir': 'experiments/expC_learned_gate',
 }
+
+
+def parse_args():
+    """解析命令行参数。"""
+    parser = argparse.ArgumentParser(
+        description='实验 C: SafetyGuard + LearnedUpdateGate',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  # 使用默认配置
+  python scripts/expC_relaxed.py
+  
+  # 覆盖关键参数
+  python scripts/expC_relaxed.py \\
+      --data_dir data/sparsedrive_dumps_full \\
+      --evaluator_ckpt experiments/sparsedrive_evaluator/evaluator_final.pth \\
+      --output_dir experiments/sparsedrive_expC \\
+      --rl_epochs 50
+        """,
+    )
+    
+    # 数据参数
+    parser.add_argument('--data_dir', type=str, default=None,
+                        help='数据目录 (默认: data/vad_dumps_full)')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size (默认: 16)')
+    
+    # 模型参数
+    parser.add_argument('--scene_dim', type=int, default=None,
+                        help='场景特征维度 (默认: 256)')
+    parser.add_argument('--plan_len', type=int, default=None,
+                        help='轨迹长度 (默认: 6)')
+    parser.add_argument('--hidden_dim', type=int, default=None,
+                        help='隐藏层维度 (默认: 256)')
+    
+    # 训练参数
+    parser.add_argument('--bc_epochs', type=int, default=None,
+                        help='Behavioral Cloning 预热轮数 (默认: 3)')
+    parser.add_argument('--rl_epochs', type=int, default=None,
+                        help='Reinforcement Learning 轮数 (默认: 15)')
+    parser.add_argument('--lr', type=float, default=None,
+                        help='学习率 (默认: 3e-4)')
+    
+    # 评估器参数
+    parser.add_argument('--evaluator_ckpt', type=str, default=None,
+                        help='UpdateEvaluator 检查点路径')
+    
+    # 输出参数
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='输出目录 (默认: experiments/expC_learned_gate)')
+    
+    return parser.parse_args()
+
+
+def merge_config(args):
+    """合并默认配置和命令行参数。"""
+    import copy
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    
+    # 数据参数
+    if args.data_dir is not None:
+        config['data']['data_dir'] = args.data_dir
+    if args.batch_size is not None:
+        config['data']['batch_size'] = args.batch_size
+    
+    # 模型参数
+    if args.scene_dim is not None:
+        config['model']['scene_dim'] = args.scene_dim
+    if args.plan_len is not None:
+        config['model']['plan_len'] = args.plan_len
+    if args.hidden_dim is not None:
+        config['model']['hidden_dim'] = args.hidden_dim
+    
+    # 训练参数
+    if args.bc_epochs is not None:
+        config['training']['bc_epochs'] = args.bc_epochs
+    if args.rl_epochs is not None:
+        config['training']['rl_epochs'] = args.rl_epochs
+    if args.lr is not None:
+        config['training']['lr'] = args.lr
+    
+    # 评估器参数
+    if args.evaluator_ckpt is not None:
+        config['evaluator_ckpt'] = args.evaluator_ckpt
+    
+    # 输出参数
+    if args.output_dir is not None:
+        config['output_dir'] = args.output_dir
+    
+    return config
 
 
 def main():
@@ -59,23 +162,36 @@ def main():
         format='%(asctime)s [%(levelname)s] %(message)s',
     )
     logger = logging.getLogger(__name__)
+    
+    # 解析命令行参数
+    args = parse_args()
+    config = merge_config(args)
+    
+    # 打印配置
+    logger.info("=" * 60)
+    logger.info("实验 C: SafetyGuard + LearnedUpdateGate")
+    logger.info("=" * 60)
+    logger.info("配置:")
+    logger.info(json.dumps(config, indent=2, default=str))
+    logger.info("=" * 60)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"使用设备: {device}")
 
-    output_dir = Path(CONFIG['output_dir'])
+    output_dir = Path(config['output_dir'])
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with open(output_dir / 'config.json', 'w') as f:
-        json.dump(CONFIG, f, indent=2, default=str)
+        json.dump(config, f, indent=2, default=str)
+    logger.info(f"配置已保存到: {output_dir / 'config.json'}")
 
     logger.info("=" * 60)
     logger.info("Step 1: 加载数据")
     logger.info("=" * 60)
 
     dataloader = build_vad_dataloader(
-        data_dir=CONFIG['data']['data_dir'],
-        batch_size=CONFIG['data']['batch_size'],
+        data_dir=config['data']['data_dir'],
+        batch_size=config['data']['batch_size'],
         num_workers=0,
         shuffle=True,
     )
@@ -86,16 +202,16 @@ def main():
     logger.info("=" * 60)
 
     policy = CorrectionPolicy(
-        scene_dim=CONFIG['model']['scene_dim'],
-        plan_len=CONFIG['model']['plan_len'],
-        hidden_dim=CONFIG['model']['hidden_dim'],
+        scene_dim=config['model']['scene_dim'],
+        plan_len=config['model']['plan_len'],
+        hidden_dim=config['model']['hidden_dim'],
     )
     num_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     logger.info(f"Policy 参数量: {num_params:,}")
 
     optimizer = torch.optim.AdamW(
         policy.parameters(),
-        lr=CONFIG['training']['lr'],
+        lr=config['training']['lr'],
         weight_decay=1e-4,
     )
 
@@ -115,13 +231,13 @@ def main():
     stapo_gate = STAPOGate(STAPOGateConfig(enabled=False))
 
     # LearnedUpdateGate: 加载预训练的 Evaluator
-    evaluator_ckpt = CONFIG['evaluator_ckpt']
+    evaluator_ckpt = config['evaluator_ckpt']
     if Path(evaluator_ckpt).exists():
         logger.info(f"加载 Evaluator from {evaluator_ckpt}")
         evaluator_cfg = UpdateEvaluatorConfig(
-            scene_dim=CONFIG['model']['scene_dim'],
-            plan_len=CONFIG['model']['plan_len'],
-            hidden_dim=CONFIG['model']['hidden_dim'],
+            scene_dim=config['model']['scene_dim'],
+            plan_len=config['model']['plan_len'],
+            hidden_dim=config['model']['hidden_dim'],
         )
         evaluator = UpdateEvaluator(evaluator_cfg).to(device)
         ckpt = torch.load(evaluator_ckpt, map_location=device, weights_only=False)
@@ -152,12 +268,12 @@ def main():
         policy=policy,
         optimizer=optimizer,
         device=device,
-        reward_config=CONFIG['reward'],
+        reward_config=config['reward'],
         safety_guard=safety_guard,
         stapo_gate=stapo_gate,
         learned_gate=learned_gate,
-        entropy_coef=CONFIG['training']['entropy_coef'],
-        grad_clip=CONFIG['training']['grad_clip'],
+        entropy_coef=config['training']['entropy_coef'],
+        grad_clip=config['training']['grad_clip'],
     )
 
     logger.info("=" * 60)
@@ -166,8 +282,8 @@ def main():
 
     metrics = trainer.train(
         dataloader=dataloader,
-        bc_epochs=CONFIG['training']['bc_epochs'],
-        rl_epochs=CONFIG['training']['rl_epochs'],
+        bc_epochs=config['training']['bc_epochs'],
+        rl_epochs=config['training']['rl_epochs'],
         output_dir=str(output_dir),
         save_every=5,
     )
@@ -175,7 +291,7 @@ def main():
     final_path = output_dir / 'policy_final.pth'
     trainer.save_checkpoint(
         str(final_path),
-        CONFIG['training']['bc_epochs'] + CONFIG['training']['rl_epochs'],
+        config['training']['bc_epochs'] + config['training']['rl_epochs'],
     )
     logger.info(f"最终模型已保存到 {final_path}")
 

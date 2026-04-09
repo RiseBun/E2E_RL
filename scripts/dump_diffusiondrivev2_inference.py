@@ -2,28 +2,17 @@
 
 用途:
     逐场景运行 DiffusionDrive 的前向推理，导出原始 planner_outputs 与 GT。
-    可选：直接使用 Adapter 转换为 E2E_RL 标准格式（一步完成）。
+    输出可直接喂给 scripts/convert_diffusiondrive_dump.py 转成 E2E_RL 标准格式。
 
 使用方式:
-    # 方式 1: 仅导出原始数据（两步流程）
     python scripts/dump_diffusiondrive_inference.py \
         --agent_config /path/to/diffusiondrive_agent.yaml \
         --checkpoint /path/to/checkpoint.pth \
         --data_path /path/to/navsim_logs/val \
         --sensor_path /path/to/sensor_blobs/val \
         --output_dir data/diffusiondrive_raw \
-        --max_samples 100
-    
-    # 方式 2: 导出 + 转换（一步完成，推荐）
-    python scripts/dump_diffusiondrive_inference.py \
-        --agent_config /path/to/diffusiondrive_agent.yaml \
-        --checkpoint /path/to/checkpoint.pth \
-        --data_path /path/to/navsim_logs/val \
-        --sensor_path /path/to/sensor_blobs/val \
-        --output_dir data/diffusiondrive_dumps \
         --max_samples 100 \
-        --convert \
-        --pool_mode grid
+        --device cuda
 
 输出结构:
     output_dir/
@@ -46,8 +35,6 @@
         },
         'gt_plan': [T, 2],
         'ego_fut_cmd': [M],  # one-hot 或命令向量
-        # 如果 --convert:
-        'interface_grid': {scene_token, reference_plan, confidence, safety_*},
     }
 """
 
@@ -66,10 +53,6 @@ import torch
 _project_root = str(Path(__file__).resolve().parents[2])
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
-
-from E2E_RL.planning_interface.adapters.diffusiondrive_adapter import (
-    DiffusionDrivePlanningAdapter,
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -175,32 +158,9 @@ def run_inference_and_dump(
     output_dir: Path,
     max_samples: Optional[int] = None,
     device: str = 'cuda',
-    convert: bool = False,
-    pool_mode: str = 'grid',
-    grid_size: int = 4,
 ):
-    """运行推理并保存输出。
-    
-    Args:
-        agent: DiffusionDrive agent
-        scene_loader: NAVSIM scene loader
-        output_dir: 输出目录
-        max_samples: 最大样本数
-        device: 设备
-        convert: 是否直接转换为 E2E_RL 标准格式
-        pool_mode: BEV 池化方式 ('mean' / 'grid' / 'ego_local')
-        grid_size: grid 池化的分块数
-    """
+    """运行推理并保存输出。"""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # 如果启用转换，初始化 Adapter
-    adapter = None
-    if convert:
-        logger.info(f'启用直接转换模式 (pool_mode={pool_mode})')
-        adapter = DiffusionDrivePlanningAdapter(
-            scene_pool=pool_mode,
-            grid_size=grid_size,
-        )
 
     sample_count = 0
     all_tokens: List[str] = scene_loader.tokens
@@ -264,39 +224,6 @@ def run_inference_and_dump(
                 'gt_plan': gt_plan,
                 'ego_fut_cmd': ego_fut_cmd,
             }
-            
-            # 如果启用转换，直接生成 interface 字段
-            if adapter is not None:
-                try:
-                    interface = adapter.extract(planner_outputs, ego_fut_cmd=ego_fut_cmd)
-                    
-                    # 转换为 CPU dict
-                    def _maybe_squeeze_first_dim(x: torch.Tensor) -> torch.Tensor:
-                        if x.dim() >= 1 and x.shape[0] == 1:
-                            return x.squeeze(0)
-                        return x
-                    
-                    interface_dict: Dict[str, torch.Tensor] = {
-                        'scene_token': _maybe_squeeze_first_dim(interface.scene_token.detach().cpu()),
-                        'reference_plan': _maybe_squeeze_first_dim(interface.reference_plan.detach().cpu()),
-                    }
-                    if getattr(interface, 'candidate_plans', None) is not None:
-                        interface_dict['candidate_plans'] = _maybe_squeeze_first_dim(
-                            interface.candidate_plans.detach().cpu()
-                        )
-                    if getattr(interface, 'plan_confidence', None) is not None:
-                        interface_dict['plan_confidence'] = _maybe_squeeze_first_dim(
-                            interface.plan_confidence.detach().cpu()
-                        )
-                    safety = getattr(interface, 'safety_features', None)
-                    if isinstance(safety, dict):
-                        for k, v in safety.items():
-                            interface_dict[f'safety_{k}'] = _maybe_squeeze_first_dim(v.detach().cpu())
-                    
-                    save_dict[f'interface_{pool_mode}'] = interface_dict
-                    
-                except Exception as e:
-                    logger.warning(f'样本 {sample_count} 转换失败: {e}')
 
             output_file = output_dir / f'{sample_count:06d}.pt'
             torch.save(save_dict, output_file)
@@ -340,25 +267,6 @@ def main():
         type=str,
         default=None,
         help='DiffusionDrive 项目根目录（默认自动推断为 ../DiffusionDrive）',
-    )
-    # 转换相关参数
-    parser.add_argument(
-        '--convert',
-        action='store_true',
-        help='是否直接转换为 E2E_RL 标准格式（推荐，一步完成）',
-    )
-    parser.add_argument(
-        '--pool_mode',
-        type=str,
-        default='grid',
-        choices=['mean', 'grid', 'ego_local'],
-        help='BEV 特征池化方式（仅当 --convert 时生效）',
-    )
-    parser.add_argument(
-        '--grid_size',
-        type=int,
-        default=4,
-        help='grid 池化的分块数（仅当 --convert 时生效）',
     )
     args = parser.parse_args()
 
@@ -407,18 +315,12 @@ def main():
         output_dir=output_dir,
         max_samples=args.max_samples,
         device=args.device,
-        convert=args.convert,
-        pool_mode=args.pool_mode,
-        grid_size=args.grid_size,
     )
 
     logger.info('='*60)
     logger.info('导出完成！')
     logger.info(f'输出目录: {output_dir}')
-    if args.convert:
-        logger.info('✓ 已直接转换为 E2E_RL 标准格式，可直接用于训练')
-    else:
-        logger.info('下一步: 运行 convert_diffusiondrive_dump.py 转换为标准格式')
+    logger.info('下一步: 运行 convert_diffusiondrive_dump.py 转换为标准格式')
     logger.info('='*60)
 
 
