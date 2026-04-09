@@ -4,9 +4,34 @@
 
 ---
 
+## 重要说明：多模型集成流程
+
+**每个新模型都需要独立跑通完整流程**：
+
+```
+对于每个 E2E 模型（VAD、DiffusionDrive、新模型...）：
+  1. 建立独立的 conda 环境（如果依赖冲突）
+  2. Dump 该模型的推理数据
+  3. 验证数据加载
+  4. （可选）数据增强
+  5. 训练 UpdateEvaluator
+  6. 训练 CorrectionPolicy
+  7. 推理验证
+```
+
+**为什么需要独立跑通？**
+- 不同模型的依赖可能冲突（如 mmcv 版本）
+- 每个模型需要独立的 Adapter 实现
+- 需要验证每个模型的数据质量
+- 确保每个模型的 pipeline 都能正常工作
+
+---
+
 ## 目录
 
+- [重要说明](#重要说明多模型集成流程)
 - [Pipeline](#pipeline)
+- [环境配置](#环境配置)
 - [运行示例 (DiffusionDrive)](#基于-diffusiondrive-的运行示例)
 - [运行示例 (VAD)](#基于vad的运行示例其他模型的过程一致)
 - [项目结构](#项目结构)
@@ -16,6 +41,54 @@
 - [推理流程](#推理流程)
 - [常见问题](#常见问题)
 
+
+---
+
+## 环境配置
+
+### 基础环境（E2E_RL 核心）
+
+```bash
+# 创建 E2E_RL 核心环境
+conda create -n e2e_rl python=3.10 -y
+conda activate e2e_rl
+
+# 安装 PyTorch（根据您的 CUDA 版本调整）
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# 安装 E2E_RL 依赖
+cd ~/E2E_RL
+pip install -r requirements.txt  # 如果存在
+```
+
+### 模型特定环境
+
+**每个模型可能需要独立环境**（如果依赖冲突）：
+
+#### VAD 环境
+```bash
+conda create -n vad python=3.10 -y
+conda activate vad
+
+# 安装 PyTorch
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# 安装 mmcv（版本必须与 PyTorch 和 CUDA 匹配）
+# CUDA 11.8 + PyTorch 2.0 示例：
+pip install mmcv==2.0.0 -f https://download.openmmlab.com/mmcv/dist/cu118/torch2.0/index.html
+
+# 安装 VAD 依赖
+cd ~/E2E_RL/projects/VAD
+pip install -r requirements.txt
+```
+
+#### DiffusionDrive 环境
+```bash
+# 参考 projects/DiffusionDrive/README.md
+# 通常需要使用 NAVSIM 环境
+```
+
+> **💡 提示**: 如果多个模型的依赖不冲突，可以共用一个环境。建议先尝试共用，遇到冲突再创建独立环境。
 
 ---
 
@@ -57,17 +130,19 @@ source setup_env.sh
 
 ### Step 2: 运行 DiffusionDrive 推理并 Dump 数据
 
+> **⚠️ 注意**: 首次运行建议先用少量样本测试（`--max_samples 10`），确认无误后再跑全集
+
 ```bash
 cd ~/E2E_RL
 
 python scripts/dump_diffusiondrive_inference.py \
-    --diffusiondrive_root ~/E2E_RL/projects/DiffusionDrive \
-    --agent_config ~/E2E_RL/projects/DiffusionDrive/navsim/planning/script/config/common/agent/diffusiondrive_agent.yaml \
-    --checkpoint ~/E2E_RL/projects/DiffusionDrive/download/ckpt/diffusiondrive_navsim_88p1_PDMS \
-    --data_path ~/E2E_RL/projects/DiffusionDrive/navsim_workspace/dataset/navsim_logs/trainval \
-    --sensor_path ~/E2E_RL/projects/DiffusionDrive/navsim_workspace/dataset/sensor_blobs/trainval \
+    --diffusiondrive_root projects/DiffusionDrive \
+    --agent_config projects/DiffusionDrive/navsim/planning/script/config/common/agent/diffusiondrive_agent.yaml \
+    --checkpoint projects/DiffusionDrive/download/ckpt/diffusiondrive_navsim_88p1_PDMS \
+    --data_path projects/DiffusionDrive/navsim_workspace/dataset/navsim_logs/trainval \
+    --sensor_path projects/DiffusionDrive/navsim_workspace/dataset/sensor_blobs/trainval \
     --output_dir data/diffusiondrive_dumps \
-    --max_samples 100 \
+    --max_samples 10 \
     --device cuda
 ```
 
@@ -92,10 +167,12 @@ python scripts/dump_diffusiondrive_inference.py \
 Loading logs: 100%|██████████| 1310/1310 [01:32<00:00, 14.09it/s]
 17:56:16 [INFO] ✓ SceneLoader 构建完成，共 47950 个场景
 17:56:16 [INFO] Step 3: 运行推理并导出...
-17:56:24 [INFO] [10/100] Saved 000009.pt (0.63s)
-17:56:26 [INFO] ✓ 推理完成！共保存 14 个样本，跳过 86 个
+17:56:24 [INFO] [10/10] Saved 000009.pt (0.63s)
+17:56:26 [INFO] ✓ 推理完成！共保存 10 个样本
 17:56:26 [INFO] 输出目录: data/diffusiondrive_dumps
 ```
+
+> **✅ 验证**: 检查输出目录是否包含 `manifest.json` 和 `.pt` 文件
 
 ### Step 3: 转换为 RL 训练格式
 
@@ -109,7 +186,7 @@ python scripts/convert_diffusiondrive_dump.py \
     --output_dir data/diffusiondrive_dumps_converted \
     --pool_mode grid \
     --grid_size 4 \
-    --max_samples 100
+    --max_samples 10
 ```
 
 **参数说明**:
@@ -127,8 +204,10 @@ python scripts/convert_diffusiondrive_dump.py \
 
 **预期输出**:
 ```
-2026-04-07 18:54:06,929 [INFO] 转换完成: 14 samples -> data/diffusiondrive_dumps_converted
+2026-04-07 18:54:06,929 [INFO] 转换完成: 10 samples -> data/diffusiondrive_dumps_converted
 ```
+
+> **✅ 验证**: 检查输出目录是否包含 `manifest.json` 文件
 
 ### Step 4: 验证数据加载
 
@@ -146,6 +225,7 @@ for batch in loader:
     print(f'✅ scene_token shape: {batch[\"interface\"].scene_token.shape}')
     break
 "
+```
 ```
 
 **期望输出**（ego-centric 坐标系）:
@@ -172,35 +252,37 @@ python scripts/augment_vad_data.py \
     --max_samples 5000
 ```
 
+> **✅ 验证**: 检查输出目录是否包含 `manifest.json` 文件
+
 ### Step 6-7: 训练和推理
 
-后续步骤只需修改数据路径：
+> **⚠️ 重要**: 训练脚本使用脚本内的 CONFIG 字典配置，不支持命令行参数覆盖。
+> 如需修改配置，请直接编辑脚本文件（`scripts/train_evaluator_v2.py` 等）中的 `CONFIG` 字典。
 
 ```bash
 # 训练 UpdateEvaluator
-python scripts/train_evaluator_v2.py \
-    --data_dir data/diffusiondrive_dumps_full \
-    --output_dir experiments/diffusiondrive_evaluator \
-    --num_epochs 50
+# 编辑 scripts/train_evaluator_v2.py 中的 CONFIG['data']['data_dir'] 和 CONFIG['output_dir']
+python scripts/train_evaluator_v2.py
 
 # 训练 CorrectionPolicy（实验 C）
-python scripts/expC_relaxed.py \
-    --data_dir data/diffusiondrive_dumps_full \
-    --output_dir experiments/diffusiondrive_policy \
-    --evaluator_ckpt experiments/diffusiondrive_evaluator/evaluator_epoch_30.pth \
-    --num_epochs 15 \
-    --bc_epochs 3
+# 编辑 scripts/expC_relaxed.py 中的 CONFIG['data']['data_dir'] 和 CONFIG['output_dir']
+python scripts/expC_relaxed.py
 
 # 推理
 python scripts/inference_with_correction.py \
     --checkpoint experiments/diffusiondrive_policy/policy_final.pth \
-    --evaluator experiments/diffusiondrive_evaluator/update_evaluator_final.pth \
+    --evaluator experiments/diffusiondrive_evaluator/evaluator_final.pth \
     --data_dir data/diffusiondrive_dumps_converted
 ```
 
 ---
 
-## 基于vad的运行示例，其他模型的过程一致 
+## 基于VAD的运行示例，其他模型的过程一致
+
+> **⚠️ 重要**: 每个新模型都需要：
+> 1. 建立独立的 conda 环境（如果依赖冲突）
+> 2. 跑通完整流程（Dump → 验证 → 训练 → 推理）
+> 3. 验证数据质量后再进行大规模训练
 
 ### Step 0: 配置 Conda 环境
 
@@ -242,17 +324,35 @@ cd VAD && pip install -r requirements.txt
 
 ### Step 2: Dump 数据
 
+> **⚠️ 注意**: 
+> - 首次运行建议先用少量样本测试（`--max_samples 10`）
+> - VAD dump 是真实推理，速度较慢，5000 个样本可能需要数小时
+> - 确认无误后再跑全量数据
+
 运行提供的 dump 脚本，可以收集模型原始输出：
 
 ```bash
 cd ~/E2E_RL
 
 # 设置 PYTHONPATH，让 dump 脚本能找到模型代码
-export PYTHONPATH=~/E2E_RL/projects/VAD:$PYTHONPATH
+export PYTHONPATH=projects/VAD:$PYTHONPATH
 
-# 运行 dump（脚本在 E2E_RL/scripts/ 中）
+# 运行 dump（先用 10 个样本测试）
 python scripts/dump_vad_inference.py \
-    --config ~/E2E_RL/projects/VAD/projects/configs/VAD/VAD_base_e2e.py \
+    --config projects/VAD/projects/configs/VAD/VAD_base_e2e.py \
+    --checkpoint /path/to/vad_epoch_xxx.pth \
+    --output_dir data/vad_dumps \
+    --data_root /path/to/nuscenes/data/ \
+    --max_samples 10
+```
+
+> **✅ 验证**: 检查输出目录是否包含 `manifest.json` 和 `.pt` 文件
+
+**全量数据导出**（确认测试通过后）：
+
+```bash
+python scripts/dump_vad_inference.py \
+    --config projects/VAD/projects/configs/VAD/VAD_base_e2e.py \
     --checkpoint /path/to/vad_epoch_xxx.pth \
     --output_dir data/vad_dumps \
     --data_root /path/to/nuscenes/data/ \
@@ -271,7 +371,7 @@ for batch in loader:
     gt = batch['gt_plan']
     ref = batch['interface'].reference_plan
     print(f'GT终点距原点: {gt[:, -1, :].norm(dim=-1)[:3]}')
-    print(f'ReF终点距原点: {ref[:, -1, :].norm(dim=-1)[:3]}')
+    print(f'Ref终点距原点: {ref[:, -1, :].norm(dim=-1)[:3]}')
     break
 "
 ```
@@ -345,49 +445,46 @@ VAD Dump 数据扩充
 **UpdateEvaluator 预测修正的 gain 和 risk，用于筛选高质量训练样本。**
 > 实测：正 gain 样本仅占 26%，73% 的修正是无效的，必须筛选。
 
+> **⚠️ 重要**: 该脚本使用脚本内的 CONFIG 字典配置，不支持命令行参数覆盖。
+> 如需修改配置，请编辑 `scripts/train_evaluator_v2.py` 中的 `CONFIG` 字典：
+> - `CONFIG['data']['data_dir']`: 数据目录
+> - `CONFIG['output_dir']`: 输出目录
+> - `CONFIG['training']['epochs']`: 训练轮数
+
 ```bash
 cd ~/E2E_RL
 
-python scripts/train_evaluator_v2.py \
-    --data_dir data/vad_dumps_full \
-    --output_dir experiments/update_evaluator_v4_5k_samples \
-    --num_epochs 50
+# 编辑脚本中的 CONFIG，然后运行
+python scripts/train_evaluator_v2.py
 ```
 
 ### Step 6: 训练 CorrectionPolicy
 
 三种实验配置可选：
 
+> **⚠️ 重要**: 这些脚本使用脚本内的 CONFIG 字典配置，不支持命令行参数覆盖。
+> 如需修改配置，请编辑对应脚本文件中的 `CONFIG` 字典。
+
 ```bash
 cd ~/E2E_RL
 
 # ==========================================
 # 实验 A: SafetyGuard only (Baseline)
+# 编辑 scripts/expA_relaxed.py 中的 CONFIG
 # ==========================================
-python scripts/expA_relaxed.py \
-    --data_dir data/vad_dumps_full \
-    --output_dir experiments/ab_comparison_v2/expA_safety_guard_only \
-    --num_epochs 15 \
-    --bc_epochs 3
+python scripts/expA_relaxed.py
 
 # ==========================================
 # 实验 B: SafetyGuard + STAPOGate
+# 编辑 scripts/expB_relaxed.py 中的 CONFIG
 # ==========================================
-python scripts/expB_relaxed.py \
-    --data_dir data/vad_dumps_full \
-    --output_dir experiments/ab_comparison_v2/expB_stapo_gate \
-    --num_epochs 15 \
-    --bc_epochs 3
+python scripts/expB_relaxed.py
 
 # ==========================================
 # 实验 C: SafetyGuard + LearnedUpdateGate (✅ 推荐)
+# 编辑 scripts/expC_relaxed.py 中的 CONFIG
 # ==========================================
-python scripts/expC_relaxed.py \
-    --data_dir data/vad_dumps_full \
-    --output_dir experiments/ab_comparison_v2/expC_learned_gate \
-    --evaluator_ckpt experiments/update_evaluator_v4_5k_samples/evaluator_epoch_30.pth \
-    --num_epochs 15 \
-    --bc_epochs 3
+python scripts/expC_relaxed.py
 ```
 
 ### Step 7: 推理
@@ -397,7 +494,7 @@ cd ~/E2E_RL
 
 python scripts/inference_with_correction.py \
     --checkpoint experiments/ab_comparison_v2/expC_learned_gate/policy_final.pth \
-    --evaluator experiments/update_evaluator_v4_5k_samples/update_evaluator_final.pth \
+    --evaluator experiments/update_evaluator_v4_5k_samples/evaluator_final.pth \
     --data_dir data/vad_dumps
 ```
 
@@ -588,7 +685,7 @@ cd ~/E2E_RL
 # 完整三层防御推理
 python scripts/inference_with_correction.py \
     --checkpoint experiments/ab_comparison_v2/expC_learned_gate/policy_final.pth \
-    --evaluator experiments/update_evaluator_v4_5k_samples/update_evaluator_final.pth \
+    --evaluator experiments/update_evaluator_v4_5k_samples/evaluator_final.pth \
     --data_dir data/vad_dumps \
     --max_samples 100
 
@@ -601,7 +698,7 @@ python scripts/inference_with_correction.py \
 # 保存结果
 python scripts/inference_with_correction.py \
     --checkpoint experiments/ab_comparison_v2/expC_learned_gate/policy_final.pth \
-    --evaluator experiments/update_evaluator_v4_5k_samples/update_evaluator_final.pth \
+    --evaluator experiments/update_evaluator_v4_5k_samples/evaluator_final.pth \
     --data_dir data/vad_dumps \
     --output_dir outputs/inference_results \
     --max_samples 1000
@@ -626,9 +723,30 @@ python scripts/inference_with_correction.py \
 ### Q: 新模型需要修改哪些文件？
 
 **A**: 只需要：
-1. Dump 脚本：在模型项目中运行推理，保存 .pt 文件
-2. Adapter：实现 `planning_interface/adapters/my_model_adapter.py`
-3. 注册：在 `data/dataloader.py` 添加一行
+1. **建立环境**: 创建 conda 环境（如需要）
+2. **Dump 脚本**: 在模型项目中运行推理，保存 .pt 文件
+3. **Adapter**: 实现 `planning_interface/adapters/my_model_adapter.py`
+4. **注册**: 在 `data/dataloader.py` 添加一行
+5. **验证**: 跑通完整流程（Dump → 验证 → 训练 → 推理）
+
+### Q: 训练脚本的命令行参数不生效？
+
+**A**: 当前训练脚本（`train_evaluator_v2.py`、`expA/B/C_relaxed.py`）使用脚本内的 `CONFIG` 字典配置，不支持命令行参数覆盖。
+
+如需修改配置：
+```python
+# 编辑对应的脚本文件，修改 CONFIG 字典
+CONFIG = {
+    'data': {
+        'data_dir': 'data/your_model_dumps_full',  # 修改这里
+        'batch_size': 16,
+    },
+    'output_dir': 'experiments/your_model_experiment',  # 修改这里
+    # ...
+}
+```
+
+> **💡 提示**: 这是已知的限制，未来版本会添加 argparse 支持。
 
 ### Q: 数据坐标系不一致？
 
