@@ -63,6 +63,72 @@ from typing import Any, Dict, List, Optional
 
 import torch
 
+# 兼容 diffusers 新版本：旧版 torch(如 2.0.x) 不包含 torch.xpu / torch.mps
+# 必须在导入 diffusers 之前设置
+if not hasattr(torch, "xpu"):
+    class _TorchXpuCompat:
+        @staticmethod
+        def empty_cache() -> None:
+            return None
+        
+        @staticmethod
+        def is_available() -> bool:
+            return False
+        
+        @staticmethod
+        def device_count() -> int:
+            return 0
+        
+        @staticmethod
+        def manual_seed(seed: int) -> None:
+            torch.manual_seed(seed)
+        
+        @staticmethod
+        def reset_peak_memory_stats(device=None) -> None:
+            return None
+        
+        @staticmethod
+        def max_memory_allocated(device=None) -> int:
+            return 0
+        
+        @staticmethod
+        def synchronize(device=None) -> None:
+            return None
+    
+    torch.xpu = _TorchXpuCompat()  # type: ignore[attr-defined]
+
+if not hasattr(torch, "mps"):
+    class _TorchMpsCompat:
+        @staticmethod
+        def empty_cache() -> None:
+            return None
+        
+        @staticmethod
+        def is_available() -> bool:
+            return False
+        
+        @staticmethod
+        def device_count() -> int:
+            return 0
+        
+        @staticmethod
+        def manual_seed(seed: int) -> None:
+            torch.manual_seed(seed)
+        
+        @staticmethod
+        def reset_peak_memory_stats(device=None) -> None:
+            return None
+        
+        @staticmethod
+        def max_memory_allocated(device=None) -> int:
+            return 0
+        
+        @staticmethod
+        def synchronize(device=None) -> None:
+            return None
+    
+    torch.mps = _TorchMpsCompat()  # type: ignore[attr-defined]
+
 _project_root = str(Path(__file__).resolve().parents[2])
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
@@ -213,13 +279,19 @@ def run_inference_and_dump(
         'scene_filter': str(scene_loader._scene_filter),
         'samples': [],
     }
-
+    
     feature_builders = agent.get_feature_builders()
-
+        
     skipped_count = 0
+    processed_count = 0  # 已处理的场景总数(包括跳过的)
+    loop_start_time = time.time()  # 用于计算速度
+        
+    logger.info(f'开始推理,目标样本数: {min(len(all_tokens), max_samples) if max_samples else len(all_tokens)}')
+    
     with torch.no_grad():
         for token in all_tokens:
             start_time = time.time()
+            processed_count += 1
 
             # 跳过缺少 sensor blobs 的场景
             try:
@@ -311,11 +383,18 @@ def run_inference_and_dump(
             elapsed = time.time() - start_time
             sample_count += 1
 
+            # 每 10 个样本打印进度
             if sample_count % 10 == 0:
+                speed = elapsed if sample_count == 10 else (time.time() - loop_start_time) / 10
+                eta_seconds = (max_samples - sample_count) * speed if max_samples else 0
+                eta_str = f'{eta_seconds/60:.1f}分钟' if eta_seconds > 60 else f'{eta_seconds:.0f}秒'
                 logger.info(
-                    f'[{sample_count}/{len(all_tokens)}] '
-                    f'Saved {output_file.name} ({elapsed:.2f}s)'
+                    f'进度: [{sample_count}/{max_samples if max_samples else "?"}] '
+                    f'({processed_count} scenes processed, {skipped_count} skipped) | '
+                    f'速度: {speed:.2f}s/sample | '
+                    f'预计剩余: {eta_str}'
                 )
+                loop_start_time = time.time()  # 重置计时
 
     manifest['total_samples'] = sample_count
     manifest['skipped_samples'] = skipped_count
